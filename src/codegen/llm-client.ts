@@ -29,12 +29,19 @@ export async function callLLM({
     logged = true;
   }
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  if (provider === "openrouter") {
+    headers["HTTP-Referer"] = "https://bridgefill.io";
+    headers["X-Title"] = "BridgeFill";
+  }
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       max_tokens: maxTokens ?? defaultMax,

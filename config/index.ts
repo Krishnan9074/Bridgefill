@@ -35,6 +35,17 @@ interface Config {
   }>;
 }
 
+const PROVIDER_DEFAULTS: Record<string, string | null> = {
+  openai: "https://api.openai.com/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  custom: null,
+};
+
+const llmProvider = process.env.LLM_PROVIDER ?? "openai";
+const llmBaseUrl = process.env.LLM_BASE_URL
+  ?? PROVIDER_DEFAULTS[llmProvider]
+  ?? "https://api.openai.com/v1";
+
 export const config: Config = {
   app: {
     env: process.env.NODE_ENV ?? "development",
@@ -57,9 +68,9 @@ export const config: Config = {
     maxMessagesPerSession: 1000,
   },
   llm: {
-    provider: process.env.LLM_PROVIDER ?? "openai",
+    provider: llmProvider,
     model: process.env.LLM_MODEL ?? "gpt-4o",
-    baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
+    baseUrl: llmBaseUrl ?? "https://api.openai.com/v1",
     apiKey: process.env.LLM_API_KEY ?? process.env.OPENAI_API_KEY ?? null,
     maxTokens: parseInt(process.env.LLM_MAX_TOKENS ?? "4096", 10),
   },

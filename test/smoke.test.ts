@@ -1,4 +1,5 @@
 import { issueOrgToken, verifyOrgToken } from "../src/auth/index.js";
+import { config } from "../config/index.js";
 import { handleMcpRequest } from "../src/mcp/router.js";
 import { bumpVersion, detectConflicts, diff } from "../src/schema/negotiation.js";
 
@@ -83,5 +84,11 @@ describe("BridgeFill smoke tests", () => {
 
     expect(conflicts.conflictCount).toBe(1);
     expect(conflicts.conflicts[0].path).toContain("/v1/search");
+  });
+
+  test("llm config resolves a usable base URL", () => {
+    expect(typeof config.llm.baseUrl).toBe("string");
+    expect(config.llm.baseUrl.length).toBeGreaterThan(0);
+    expect(typeof config.llm.model).toBe("string");
   });
 });

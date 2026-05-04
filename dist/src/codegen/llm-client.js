@@ -15,12 +15,17 @@ export async function callLLM({ systemPrompt, userMessage, maxTokens, }) {
         process.stderr.write(`[llm] provider=${provider} model=${model} baseUrl=${baseUrl}\n`);
         logged = true;
     }
+    const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+    };
+    if (provider === "openrouter") {
+        headers["HTTP-Referer"] = "https://bridgefill.io";
+        headers["X-Title"] = "BridgeFill";
+    }
     const response = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
             model,
             max_tokens: maxTokens ?? defaultMax,

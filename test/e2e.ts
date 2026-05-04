@@ -69,6 +69,26 @@ async function main(): Promise<void> {
     assert(body.status === "ok", `Expected status=ok, received ${body.status}`);
   });
 
+  passed += await runCheck("GET /llm/status returns current LLM config", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/llm/status",
+    });
+    const body = response.json() as {
+      provider: string;
+      model: string;
+      base_url: string;
+      api_key_set: boolean;
+      max_tokens: number;
+    };
+    assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+    assert(typeof body.provider === "string" && body.provider.length > 0, "Expected provider");
+    assert(typeof body.model === "string" && body.model.length > 0, "Expected model");
+    assert(typeof body.base_url === "string" && body.base_url.length > 0, "Expected base_url");
+    assert(typeof body.api_key_set === "boolean", "Expected api_key_set boolean");
+    assert(typeof body.max_tokens === "number", "Expected max_tokens number");
+  });
+
   passed += await runCheck("POST /mcp initialize returns capabilities with tools key", async () => {
     const response = await server.inject({
       method: "POST",
@@ -812,7 +832,7 @@ async function main(): Promise<void> {
 
   await server.close();
 
-  if (passed !== 32) {
+  if (passed !== 33) {
     process.exit(1);
   }
 }

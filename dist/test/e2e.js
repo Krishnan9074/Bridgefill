@@ -61,6 +61,19 @@ async function main() {
         assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
         assert(body.status === "ok", `Expected status=ok, received ${body.status}`);
     });
+    passed += await runCheck("GET /llm/status returns current LLM config", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/llm/status",
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(typeof body.provider === "string" && body.provider.length > 0, "Expected provider");
+        assert(typeof body.model === "string" && body.model.length > 0, "Expected model");
+        assert(typeof body.base_url === "string" && body.base_url.length > 0, "Expected base_url");
+        assert(typeof body.api_key_set === "boolean", "Expected api_key_set boolean");
+        assert(typeof body.max_tokens === "number", "Expected max_tokens number");
+    });
     passed += await runCheck("POST /mcp initialize returns capabilities with tools key", async () => {
         const response = await server.inject({
             method: "POST",
@@ -616,7 +629,7 @@ async function main() {
         assert(payload.files.some((file) => file.source === "fallback_generated"), "Expected a fallback_generated file");
         assert(payload.files.some((file) => file.content.includes("X-PAYMENTS-KEY")), "Expected provider sample content to appear in output");
     });
-    passed += await runCheck("validate_integration passes for generated fallback/provider output and fails for missing required params", async () => {
+    passed += await runCheck("validate_integration passes for generated fallback/provider output", async () => {
         const generatedResponse = await callTool(server, 38, "get_session_status", {
             org_token: consumerToken,
             session_id: phase4SessionId,
@@ -629,6 +642,8 @@ async function main() {
         });
         const validPayload = JSON.parse(validResponse.result.content[0].text);
         assert(validPayload.passed === true, "Expected generated integration to validate successfully");
+    });
+    passed += await runCheck("validate_integration detects missing required params", async () => {
         const invalidResponse = await callTool(server, 40, "validate_integration", {
             org_token: consumerToken,
             session_id: phase4SessionId,
@@ -716,7 +731,7 @@ async function main() {
         assert(payload.files.every((file) => file.content.length > 0), "Expected non-empty LLM-generated file content");
     });
     await server.close();
-    if (passed !== 32) {
+    if (passed !== 33) {
         process.exit(1);
     }
 }

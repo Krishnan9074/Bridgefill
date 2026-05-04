@@ -62,6 +62,13 @@ export async function buildServer() {
         protocol: config.mcp.protocolVersion,
         time: new Date().toISOString(),
     }));
+    fastify.get("/llm/status", async () => ({
+        provider: config.llm.provider,
+        model: config.llm.model,
+        base_url: config.llm.baseUrl,
+        api_key_set: !!config.llm.apiKey,
+        max_tokens: config.llm.maxTokens,
+    }));
     fastify.post("/auth/token", async (request) => {
         const { org_id: orgId, api_key: apiKey, role, service_id: serviceId } = request.body ?? {};
         const token = issueOrgToken(orgId, apiKey, role, serviceId);
