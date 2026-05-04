@@ -115,6 +115,40 @@ export interface GeneratedOutput {
   model: string | null;
 }
 
+export interface GenerationOptions {
+  include_tests?: boolean;
+  endpoints?: string[];
+}
+
+export interface StandaloneGenerateRequest {
+  service_id: string;
+  version?: string;
+  consumer_context?: ConsumerContext;
+  options?: GenerationOptions;
+}
+
+export interface StandaloneGenerateResponse {
+  service_id: string;
+  schema_version: string;
+  model_used: string | null;
+  generation_time_ms: number;
+  files: GeneratedFile[];
+  summary: string;
+  next_steps: string[];
+  warnings: string[];
+}
+
+export interface GenerateJobRecord {
+  jobId: string;
+  status: "pending" | "running" | "complete" | "failed";
+  orgId: string;
+  request: StandaloneGenerateRequest;
+  result: StandaloneGenerateResponse | null;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 export interface SessionMessage {
   id: string;
   text: string;

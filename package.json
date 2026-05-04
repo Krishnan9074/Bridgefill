@@ -8,6 +8,7 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
+    "generate:cli": "tsx cli/generate.ts",
     "test:e2e": "tsx test/e2e.ts",
     "test": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.cjs"
   },

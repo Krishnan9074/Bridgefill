@@ -1,5 +1,5 @@
 import { config } from "../../config/index.js";
-import type { CodeSample, ConsumerContext, GeneratedFile, GeneratedOutput, NegotiationResult, NormalizedEndpoint, NormalizedSchema } from "../types.js";
+import type { CodeSample, ConsumerContext, GeneratedFile, GeneratedOutput, GenerationOptions, NegotiationResult, NormalizedEndpoint, NormalizedSchema } from "../types.js";
 import { callLLM } from "./llm-client.js";
 
 function extensionForLanguage(language?: string): string {
@@ -89,16 +89,24 @@ function buildUserMessage({
   codeSamples,
   consumerContext,
   negotiation,
+  options,
 }: {
   contract: NormalizedSchema;
   codeSamples: CodeSample[];
   consumerContext: ConsumerContext;
   negotiation: NegotiationResult;
+  options?: GenerationOptions;
 }): string {
   const endpoints = filterEndpoints(contract, consumerContext);
   const sections = [
     "## Consumer stack context",
     JSON.stringify(consumerContext, null, 2),
+    "",
+    "## Generation options",
+    JSON.stringify({
+      include_tests: options?.include_tests ?? true,
+      endpoints: consumerContext.endpoints_needed ?? [],
+    }, null, 2),
     "",
     "## Provider API contract",
     JSON.stringify({ ...contract, endpoints }, null, 2),
@@ -265,11 +273,13 @@ function buildFallbackOutput({
   codeSamples,
   consumerContext,
   negotiation,
+  options,
 }: {
   contract: NormalizedSchema;
   codeSamples: CodeSample[];
   consumerContext: ConsumerContext;
   negotiation: NegotiationResult;
+  options?: GenerationOptions;
 }): GeneratedOutput {
   const ext = extensionForLanguage(consumerContext.language);
   const endpoints = filterEndpoints(contract, consumerContext).filter((endpoint) => !negotiation.blockedEndpoints.includes(endpoint.path));
@@ -279,7 +289,9 @@ function buildFallbackOutput({
     files.push(buildEndpointFile(endpoint, ext, consumerContext, selectProviderSample(codeSamples, endpoint, consumerContext.language)));
   }
 
-  files.push(buildTestFile(ext, endpoints));
+  if (options?.include_tests !== false) {
+    files.push(buildTestFile(ext, endpoints));
+  }
 
   return {
     files,
@@ -302,6 +314,7 @@ export async function generateIntegrationCode({
   codeSamples,
   consumerContext,
   negotiation,
+  options,
 }: {
   sessionId: string;
   orgId: string;
@@ -309,15 +322,16 @@ export async function generateIntegrationCode({
   codeSamples: CodeSample[];
   consumerContext: ConsumerContext;
   negotiation: NegotiationResult;
+  options?: GenerationOptions;
 }): Promise<GeneratedOutput> {
   if (!config.llm.apiKey) {
-    return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation });
+    return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, options });
   }
 
   try {
     const content = await callLLM({
       systemPrompt: buildSystemPrompt(),
-      userMessage: buildUserMessage({ contract, codeSamples, consumerContext, negotiation }),
+      userMessage: buildUserMessage({ contract, codeSamples, consumerContext, negotiation, options }),
       maxTokens: 4096,
     });
     const parsed = parseLlmJson(content);
@@ -333,6 +347,6 @@ export async function generateIntegrationCode({
       model: config.llm.model,
     };
   } catch {
-    return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation });
+    return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, options });
   }
 }

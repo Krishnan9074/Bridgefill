@@ -1,3 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 function assert(condition, message) {
     if (!condition) {
         throw new Error(message);
@@ -47,6 +53,9 @@ async function callTool(server, id, name, args) {
     });
     return response.json();
 }
+async function sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
 async function main() {
     process.env.NODE_ENV = "test";
     const { buildServer } = await import("../src/server.js");
@@ -89,7 +98,7 @@ async function main() {
         assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
         assert(body.result?.capabilities?.tools, "Expected capabilities.tools to be defined");
     });
-    passed += await runCheck("tools/list returns all 10 tools", async () => {
+    passed += await runCheck("tools/list returns all 13 tools", async () => {
         const response = await server.inject({
             method: "POST",
             url: "/mcp",
@@ -160,6 +169,9 @@ async function main() {
     let llmSessionId = "";
     let registryServiceId = "";
     let registryEntryId = "";
+    let largeRegistryServiceId = "";
+    let asyncJobId = "";
+    let standaloneGeneratedFiles = [];
     passed += await runCheck("POST /auth/token with valid provider API key returns signed JWT", async () => {
         const response = await server.inject({
             method: "POST",
@@ -826,8 +838,153 @@ async function main() {
         assert(payload.hasDiff === true, "Expected diff to exist");
         assert(payload.additiveCount > 0, "Expected additive diff count");
     });
+    passed += await runCheck("POST /generate returns files with no session setup and accepts ?api_key auth", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: `/generate?api_key=${encodeURIComponent("dev-provider-secret")}`,
+            payload: {
+                service_id: registryServiceId,
+                version: "latest",
+                consumer_context: {
+                    language: "typescript",
+                    framework: "nextjs",
+                    use_case: "Search places in a storefront flow",
+                    existing_patterns: "We use axios and dotenv",
+                },
+                options: {
+                    include_tests: true,
+                    endpoints: ["/v1/places/search"],
+                },
+            },
+        });
+        const payload = response.json();
+        standaloneGeneratedFiles = payload.files;
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(payload.service_id === registryServiceId, `Expected ${registryServiceId}, received ${payload.service_id}`);
+        assert(payload.schema_version === "1.1.0", `Expected 1.1.0, received ${payload.schema_version}`);
+        assert(Array.isArray(payload.files) && payload.files.length >= 2, "Expected generated files");
+        assert(payload.generation_time_ms >= 0, "Expected non-negative generation time");
+    });
+    passed += await runCheck("POST /generate with more than 5 endpoints returns 202 and a job id", async () => {
+        const registerResponse = await callTool(server, 53, "register_service", {
+            org_token: providerToken,
+            service_name: "Large Registry API",
+            service_description: "Async generation coverage",
+            tags: ["async"],
+        });
+        largeRegistryServiceId = JSON.parse(registerResponse.result.content[0].text).service_id;
+        await callTool(server, 54, "publish_to_registry", {
+            org_token: providerToken,
+            service_id: largeRegistryServiceId,
+            schema: {
+                base_url: "https://large.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-LARGE-KEY" },
+                endpoints: [
+                    { path: "/v1/a", method: "GET", summary: "A", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                    { path: "/v1/b", method: "GET", summary: "B", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                    { path: "/v1/c", method: "GET", summary: "C", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                    { path: "/v1/d", method: "GET", summary: "D", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                    { path: "/v1/e", method: "GET", summary: "E", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                    { path: "/v1/f", method: "GET", summary: "F", parameters: [{ name: "id", in: "query", required: true, schema: { type: "string" } }], response_schema: { type: "object" } },
+                ],
+            },
+            changelog: "Initial async release",
+            tags: ["async"],
+        });
+        const response = await server.inject({
+            method: "POST",
+            url: "/generate",
+            headers: {
+                authorization: `Bearer ${consumerToken}`,
+            },
+            payload: {
+                service_id: largeRegistryServiceId,
+                version: "latest",
+                consumer_context: {
+                    language: "typescript",
+                    framework: "nextjs",
+                    use_case: "Load six resources",
+                },
+                options: {
+                    include_tests: true,
+                },
+            },
+        });
+        const payload = response.json();
+        asyncJobId = payload.job_id;
+        assert(response.statusCode === 202, `Expected 202, received ${response.statusCode}`);
+        assert(payload.job_id.startsWith("job_"), `Expected job id, received ${payload.job_id}`);
+        assert(payload.status === "pending", `Expected pending, received ${payload.status}`);
+    });
+    passed += await runCheck("GET /generate/status/:job_id returns the completed async result after polling", async () => {
+        let status = "";
+        let lastPayload = null;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            const response = await server.inject({
+                method: "GET",
+                url: `/generate/status/${asyncJobId}`,
+                headers: {
+                    authorization: `Bearer ${consumerToken}`,
+                },
+            });
+            lastPayload = response.json();
+            status = lastPayload?.status ?? "";
+            if (status === "complete") {
+                break;
+            }
+            if (status === "failed") {
+                throw new Error("Expected async generate job to complete successfully");
+            }
+            await sleep(20);
+        }
+        assert(status === "complete", `Expected complete, received ${status}`);
+        assert(lastPayload?.result?.service_id === largeRegistryServiceId, "Expected async result service id");
+        assert((lastPayload?.result?.files.length ?? 0) >= 2, "Expected async generated files");
+    });
+    passed += await runCheck("POST /validate runs standalone validation against a published schema", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/validate",
+            headers: {
+                authorization: `Bearer ${consumerToken}`,
+            },
+            payload: {
+                service_id: registryServiceId,
+                version: "latest",
+                language: "typescript",
+                code: standaloneGeneratedFiles.map((file) => file.content).join("\n"),
+            },
+        });
+        const payload = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(payload.passed === true, "Expected standalone validation to pass");
+        assert(payload.issue_count === 0, `Expected 0 issues, received ${payload.issue_count}`);
+        assert(payload.schema_version === "1.1.0", `Expected 1.1.0, received ${payload.schema_version}`);
+    });
+    passed += await runCheck("CLI generate command writes generated files to disk", async () => {
+        const serverAddress = await server.listen({ host: "127.0.0.1", port: 0 });
+        const outputDir = await mkdtemp(join(tmpdir(), "bridgefill-cli-"));
+        const { stdout } = await execFileAsync(process.execPath, [
+            "node_modules/tsx/dist/cli.mjs",
+            "cli/generate.ts",
+            "--service", registryServiceId,
+            "--language", "typescript",
+            "--framework", "nextjs",
+            "--use-case", "Search nearby places",
+            "--out", outputDir,
+            "--server", serverAddress,
+            "--key", "dev-provider-secret",
+        ], {
+            cwd: process.cwd(),
+        });
+        const files = await readdir(outputDir);
+        assert(files.length >= 2, `Expected generated files on disk, received ${files.length}`);
+        const firstFile = await readFile(join(outputDir, files[0]), "utf8");
+        assert(firstFile.length > 0, "Expected generated file content");
+        assert(stdout.includes("BridgeFill - Generated") || stdout.includes("BridgeFill — Generated"), "Expected CLI summary output");
+    });
     await server.close();
-    if (passed !== 38) {
+    if (passed !== 43) {
         process.exit(1);
     }
 }
@@ -835,4 +992,3 @@ void main().catch((error) => {
     process.stderr.write(`${error.stack ?? error.message}\n`);
     process.exit(1);
 });
-export {};

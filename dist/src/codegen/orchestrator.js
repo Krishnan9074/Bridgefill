@@ -62,11 +62,17 @@ function buildSystemPrompt() {
         "}",
     ].join("\n");
 }
-function buildUserMessage({ contract, codeSamples, consumerContext, negotiation, }) {
+function buildUserMessage({ contract, codeSamples, consumerContext, negotiation, options, }) {
     const endpoints = filterEndpoints(contract, consumerContext);
     const sections = [
         "## Consumer stack context",
         JSON.stringify(consumerContext, null, 2),
+        "",
+        "## Generation options",
+        JSON.stringify({
+            include_tests: options?.include_tests ?? true,
+            endpoints: consumerContext.endpoints_needed ?? [],
+        }, null, 2),
         "",
         "## Provider API contract",
         JSON.stringify({ ...contract, endpoints }, null, 2),
@@ -216,14 +222,16 @@ function buildTestFile(ext, endpoints) {
         ].join("\n"),
     };
 }
-function buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, }) {
+function buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, options, }) {
     const ext = extensionForLanguage(consumerContext.language);
     const endpoints = filterEndpoints(contract, consumerContext).filter((endpoint) => !negotiation.blockedEndpoints.includes(endpoint.path));
     const files = [buildAuthFile(contract, ext)];
     for (const endpoint of endpoints) {
         files.push(buildEndpointFile(endpoint, ext, consumerContext, selectProviderSample(codeSamples, endpoint, consumerContext.language)));
     }
-    files.push(buildTestFile(ext, endpoints));
+    if (options?.include_tests !== false) {
+        files.push(buildTestFile(ext, endpoints));
+    }
     return {
         files,
         summary: `Generated ${files.length} integration file${files.length === 1 ? "" : "s"} using the deterministic fallback path.`,
@@ -239,14 +247,14 @@ function buildFallbackOutput({ contract, codeSamples, consumerContext, negotiati
         model: null,
     };
 }
-export async function generateIntegrationCode({ contract, codeSamples, consumerContext, negotiation, }) {
+export async function generateIntegrationCode({ contract, codeSamples, consumerContext, negotiation, options, }) {
     if (!config.llm.apiKey) {
-        return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation });
+        return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, options });
     }
     try {
         const content = await callLLM({
             systemPrompt: buildSystemPrompt(),
-            userMessage: buildUserMessage({ contract, codeSamples, consumerContext, negotiation }),
+            userMessage: buildUserMessage({ contract, codeSamples, consumerContext, negotiation, options }),
             maxTokens: 4096,
         });
         const parsed = parseLlmJson(content);
@@ -263,6 +271,6 @@ export async function generateIntegrationCode({ contract, codeSamples, consumerC
         };
     }
     catch {
-        return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation });
+        return buildFallbackOutput({ contract, codeSamples, consumerContext, negotiation, options });
     }
 }

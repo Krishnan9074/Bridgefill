@@ -6,6 +6,7 @@ import { config } from "../config/index.js";
 import { issueOrgToken, verifyOrgToken } from "./auth/index.js";
 import { createApiKey, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
 import { auditAuth, queryAuditLog } from "./auth/audit.js";
+import { generateFromRegistry, resolveRegistrySchema, resolveStandaloneAuth, shouldRunAsync, StandaloneRequestError, validateGeneratedFiles } from "./codegen/standalone.js";
 import { addClient } from "./events/bus.js";
 import { handleMcpBatch, handleMcpRequest } from "./mcp/router.js";
 import {
@@ -16,8 +17,9 @@ import {
   listRegistry,
   publishToRegistry,
 } from "./registry/schema-store.js";
+import { createGenerateJob, getGenerateJob, runGenerateJob } from "./routes/generate.js";
 import { getPublicServiceList } from "./tools/service-registry.js";
-import type { CodeSample, RawSchemaContract, Role } from "./types.js";
+import type { CodeSample, RawSchemaContract, Role, StandaloneGenerateRequest } from "./types.js";
 import { getService } from "./tools/service-registry.js";
 
 function getBearerToken(request: FastifyRequest): string | null {
@@ -305,6 +307,84 @@ export async function buildServer() {
       return { error: "Registry versions not found", code: "VALIDATION_ERROR" };
     }
     return schemaDiff;
+  });
+
+  fastify.post("/generate", async (request: FastifyRequest<{
+    Querystring: { api_key?: string };
+    Body: StandaloneGenerateRequest;
+  }>, reply) => {
+    const auth = resolveStandaloneAuth({
+      bearerToken: getBearerToken(request),
+      rawApiKey: request.query.api_key ?? null,
+    });
+    const body = request.body ?? {} as StandaloneGenerateRequest;
+    const resolved = resolveRegistrySchema(body.service_id, body.version ?? "latest");
+
+    if (shouldRunAsync(resolved.entry, body.options, body.consumer_context)) {
+      const job = createGenerateJob(auth.orgId, body);
+      runGenerateJob(job.jobId);
+      reply.code(202);
+      return {
+        job_id: job.jobId,
+        status: job.status,
+        poll: `/generate/status/${job.jobId}`,
+      };
+    }
+
+    return generateFromRegistry({
+      serviceReference: body.service_id,
+      version: body.version ?? "latest",
+      consumerContext: body.consumer_context,
+      options: body.options,
+      orgId: auth.orgId,
+    });
+  });
+
+  fastify.get("/generate/status/:job_id", async (request: FastifyRequest<{
+    Params: { job_id: string };
+    Querystring: { api_key?: string };
+  }>, reply) => {
+    const auth = resolveStandaloneAuth({
+      bearerToken: getBearerToken(request),
+      rawApiKey: request.query.api_key ?? null,
+    });
+    const job = getGenerateJob(request.params.job_id);
+    if (!job) {
+      reply.code(404);
+      return { error: "Job not found", code: "NOT_FOUND" };
+    }
+    if (job.orgId !== auth.orgId) {
+      reply.code(403);
+      return { error: "Job belongs to another organization", code: "FORBIDDEN" };
+    }
+    return {
+      job_id: job.jobId,
+      status: job.status,
+      created_at: job.createdAt,
+      completed_at: job.completedAt,
+      result: job.result,
+      error: job.error,
+    };
+  });
+
+  fastify.post("/validate", async (request: FastifyRequest<{
+    Querystring: { api_key?: string };
+    Body: {
+      service_id: string;
+      version?: string;
+      code: string;
+      language?: string;
+    };
+  }>) => {
+    resolveStandaloneAuth({
+      bearerToken: getBearerToken(request),
+      rawApiKey: request.query.api_key ?? null,
+    });
+    const resolved = resolveRegistrySchema(request.body.service_id, request.body.version ?? "latest");
+    return validateGeneratedFiles({
+      entry: resolved.entry,
+      files: [{ filename: `submitted.${request.body.language ?? "txt"}`, content: request.body.code }],
+    });
   });
 
   fastify.post("/mcp", async (request: FastifyRequest<{ Body: unknown }>, reply) => {
