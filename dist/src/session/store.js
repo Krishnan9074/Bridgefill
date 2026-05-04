@@ -96,6 +96,13 @@ export function getSession(sessionId, callerOrgId) {
 export function getSessionInternal(sessionId) {
     return sessionById.get(sessionId) ?? null;
 }
+export function getSessionByServiceId(serviceId) {
+    const sessionId = sessions.get(serviceId);
+    if (!sessionId) {
+        return null;
+    }
+    return sessionById.get(sessionId) ?? null;
+}
 export function attachSchema(sessionId, schemaId, schema) {
     const session = getSessionInternal(sessionId);
     if (!session) {

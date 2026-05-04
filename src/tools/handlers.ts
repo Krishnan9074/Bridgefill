@@ -4,16 +4,25 @@ import { config } from "../../config/index.js";
 import { assertToolAllowed, verifyOrgToken } from "../auth/index.js";
 import { auditCodegen, auditSchema, auditSession, auditTool } from "../auth/audit.js";
 import { generateIntegrationCode } from "../codegen/orchestrator.js";
+import {
+  diffRegistryVersions,
+  getLatestSchema,
+  getRegistryEntry,
+  getSchemaHistory,
+  listRegistry as listRegistryEntries,
+  publishToRegistry,
+} from "../registry/schema-store.js";
 import { diff, bumpVersion, negotiate } from "../schema/negotiation.js";
 import {
   appendMessage,
   attachGeneratedCode,
   attachSchema,
   getSession,
+  getSessionByServiceId,
   getSessionInternal,
   joinSession as storeJoinSession,
 } from "../session/store.js";
-import type { CodeSample, ConsumerContext, GeneratedOutput, NormalizedSchema, OrgClaims, RawSchemaContract, ServiceEntry, SessionRecord } from "../types.js";
+import type { CodeSample, ConsumerContext, GeneratedOutput, NormalizedSchema, OrgClaims, RawSchemaContract, RegistrySchemaRecord, ServiceEntry, SessionRecord } from "../types.js";
 import { getService, registerInRegistry } from "./service-registry.js";
 
 export class ValidationError extends Error {
@@ -87,6 +96,19 @@ function normaliseSchema(raw: RawSchemaContract): NormalizedSchema {
     rate_limits: raw.rate_limits ?? {},
     sdk_languages: raw.sdk_languages ?? [],
     normalised_at: new Date().toISOString(),
+  };
+}
+
+function registrySummary(entry: RegistrySchemaRecord): Record<string, unknown> {
+  return {
+    registry_id: entry.registryId,
+    service_id: entry.serviceId,
+    service_name: entry.serviceName,
+    org_name: entry.orgName,
+    latest_version: entry.version,
+    endpoint_count: entry.schema.endpoints.length,
+    tags: entry.tags,
+    published_at: entry.publishedAt,
   };
 }
 
@@ -438,6 +460,122 @@ export async function emitMessage(args: {
   });
 }
 
+export async function publishToRegistryTool(args: {
+  org_token?: string;
+  service_id: string;
+  schema: RawSchemaContract;
+  code_samples?: CodeSample[];
+  changelog?: string;
+  tags?: string[];
+}): Promise<Record<string, unknown>> {
+  return withAuthedTool(args, "publish_to_registry", async (claims) => {
+    const service = getService(args.service_id);
+    if (!service) {
+      throw new ValidationError("Service not found");
+    }
+
+    if (!args.schema?.base_url) {
+      throw new ValidationError("schema.base_url is required");
+    }
+    if (!args.schema.auth?.type) {
+      throw new ValidationError("schema.auth.type is required");
+    }
+    if (!Array.isArray(args.schema.endpoints) || args.schema.endpoints.length === 0) {
+      throw new ValidationError("schema.endpoints must be a non-empty array");
+    }
+
+    const normalised = normaliseSchema(args.schema);
+    const { registryId, version, diffFromPrevious, record } = publishToRegistry(
+      claims.orgId,
+      claims.orgName,
+      args.service_id,
+      service.name,
+      normalised,
+      args.code_samples ?? [],
+      args.changelog ?? "",
+      args.tags ?? service.tags ?? [],
+    );
+
+    auditSchema.published(registryId, registryId, claims.orgId, normalised.endpoints.length);
+    if (diffFromPrevious?.hasDiff) {
+      auditSchema.diffed(registryId, diffFromPrevious.changes.length);
+    }
+
+    const session = getSessionByServiceId(args.service_id);
+    if (session && session.status === "active") {
+      const schemaId = `schema_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      attachSchema(session.id, schemaId, {
+        raw: args.schema,
+        normalised: record.schema,
+        codeSamples: record.codeSamples,
+        version: record.version,
+      });
+      session.schemaHistory = getSchemaHistory(args.service_id).map((entry) => ({
+        version: entry.version,
+        publishedAt: entry.publishedAt,
+        isBreaking: entry.isLatest ? !!diffFromPrevious?.breakingCount : false,
+        schema: entry.schema,
+      }));
+    }
+
+    return {
+      registry_id: registryId,
+      version,
+      diff_from_previous: diffFromPrevious,
+      message: "Schema published to registry.",
+    };
+  });
+}
+
+export async function discoverFromRegistry(args: {
+  org_token?: string;
+  service_id: string;
+  version?: string;
+}): Promise<Record<string, unknown>> {
+  return withAuthedTool(args, "discover_from_registry", async (claims) => {
+    const targetVersion = args.version ?? "latest";
+    const history = getSchemaHistory(args.service_id);
+    const entry = targetVersion === "latest"
+      ? getLatestSchema(args.service_id)
+      : history.find((item) => item.version === targetVersion) ?? null;
+
+    if (!entry) {
+      throw new ValidationError("Registry schema not found");
+    }
+
+    auditSchema.discovered(entry.registryId, entry.registryId, claims.orgId);
+
+    return {
+      registry_id: entry.registryId,
+      version: entry.version,
+      schema: entry.schema,
+      code_samples_count: entry.codeSamples.length,
+      changelog: entry.changelog,
+      schema_history: history.map((item) => ({
+        version: item.version,
+        published_at: item.publishedAt,
+        is_breaking: item.version === entry.version ? false : (diffRegistryVersions(args.service_id, item.version, entry.version)?.breakingCount ?? 0) > 0,
+      })),
+      message: "Registry schema discovered.",
+    };
+  });
+}
+
+export async function listRegistryTool(args: {
+  org_token?: string;
+  tags?: string[];
+  q?: string;
+  limit?: number;
+}): Promise<Record<string, unknown>> {
+  return withAuthedTool(args, "list_registry", async () => ({
+    services: listRegistryEntries({
+      tags: args.tags,
+      q: args.q,
+      limit: args.limit,
+    }).map(registrySummary),
+  }));
+}
+
 export const TOOL_HANDLERS = {
   ping,
   register_service: registerService,
@@ -449,4 +587,7 @@ export const TOOL_HANDLERS = {
   generate_integration: generateIntegration,
   validate_integration: validateIntegration,
   emit_message: emitMessage,
+  publish_to_registry: publishToRegistryTool,
+  discover_from_registry: discoverFromRegistry,
+  list_registry: listRegistryTool,
 };

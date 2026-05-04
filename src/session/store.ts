@@ -118,6 +118,14 @@ export function getSessionInternal(sessionId: string): SessionRecord | null {
   return sessionById.get(sessionId) ?? null;
 }
 
+export function getSessionByServiceId(serviceId: string): SessionRecord | null {
+  const sessionId = sessions.get(serviceId);
+  if (!sessionId) {
+    return null;
+  }
+  return sessionById.get(sessionId) ?? null;
+}
+
 export function attachSchema(sessionId: string, schemaId: string, schema: Omit<NonNullable<SessionRecord["schema"]>, "id">): NonNullable<SessionRecord["schema"]> {
   const session = getSessionInternal(sessionId);
   if (!session) {

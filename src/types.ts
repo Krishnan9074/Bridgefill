@@ -159,6 +159,21 @@ export interface ServiceEntry {
   registeredAt: string;
 }
 
+export interface RegistrySchemaRecord {
+  registryId: string;
+  serviceId: string;
+  serviceName: string;
+  orgId: string;
+  orgName: string;
+  version: string;
+  schema: NormalizedSchema;
+  codeSamples: CodeSample[];
+  changelog: string;
+  tags: string[];
+  isLatest: boolean;
+  publishedAt: string;
+}
+
 export interface ApiKeyRecord {
   keyId: string;
   orgId: string;

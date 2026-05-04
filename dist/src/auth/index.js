@@ -17,10 +17,10 @@ export class AuthError extends Error {
     }
 }
 export function toolsForRole(role) {
-    const shared = ["ping", "get_session_status", "emit_message"];
+    const shared = ["ping", "get_session_status", "emit_message", "list_registry"];
     const byRole = {
-        provider: [...shared, "register_service", "join_session", "publish_schema", "provide_code_sample"],
-        consumer: [...shared, "join_session", "discover_schema", "generate_integration", "validate_integration"],
+        provider: [...shared, "register_service", "join_session", "publish_schema", "provide_code_sample", "publish_to_registry"],
+        consumer: [...shared, "join_session", "discover_schema", "generate_integration", "validate_integration", "discover_from_registry"],
     };
     const tools = byRole[role];
     if (!tools) {

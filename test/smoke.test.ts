@@ -4,7 +4,7 @@ import { handleMcpRequest } from "../src/mcp/router.js";
 import { bumpVersion, detectConflicts, diff } from "../src/schema/negotiation.js";
 
 describe("BridgeFill smoke tests", () => {
-  test("tools/list exposes ten MCP tools", async () => {
+  test("tools/list exposes thirteen MCP tools", async () => {
     const response = await handleMcpRequest(
       {
         jsonrpc: "2.0",
@@ -18,7 +18,7 @@ describe("BridgeFill smoke tests", () => {
       },
     );
 
-    expect((response as { result: { tools: unknown[] } }).result.tools).toHaveLength(10);
+    expect((response as { result: { tools: unknown[] } }).result.tools).toHaveLength(13);
   });
 
   test("issued org tokens round-trip through verification", () => {

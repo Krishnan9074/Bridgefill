@@ -3,13 +3,70 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 
 import { config } from "../config/index.js";
-import { issueOrgToken } from "./auth/index.js";
+import { issueOrgToken, verifyOrgToken } from "./auth/index.js";
 import { createApiKey, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
 import { auditAuth, queryAuditLog } from "./auth/audit.js";
 import { addClient } from "./events/bus.js";
 import { handleMcpBatch, handleMcpRequest } from "./mcp/router.js";
+import {
+  diffRegistryVersions,
+  getLatestSchema,
+  getRegistryEntry,
+  getSchemaHistory,
+  listRegistry,
+  publishToRegistry,
+} from "./registry/schema-store.js";
 import { getPublicServiceList } from "./tools/service-registry.js";
-import type { Role } from "./types.js";
+import type { CodeSample, RawSchemaContract, Role } from "./types.js";
+import { getService } from "./tools/service-registry.js";
+
+function getBearerToken(request: FastifyRequest): string | null {
+  const authHeader = request.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return null;
+  }
+  return authHeader.slice("Bearer ".length).trim() || null;
+}
+
+function requireBearerClaims(request: FastifyRequest) {
+  const token = getBearerToken(request);
+  if (!token) {
+    throw Object.assign(new Error("Missing org token"), { statusCode: 401, machineCode: "AUTH_ERROR" });
+  }
+  return verifyOrgToken(token);
+}
+
+function normaliseSchema(raw: RawSchemaContract) {
+  return {
+    base_url: raw.base_url,
+    auth: {
+      type: raw.auth?.type ?? "none",
+      location: raw.auth?.location ?? null,
+      key_name: raw.auth?.key_name ?? null,
+    },
+    endpoints: (raw.endpoints ?? []).map((endpoint) => {
+      const allParams = (endpoint.parameters ?? []).map((param) => ({
+        name: param.name,
+        in: param.in,
+        required: !!param.required,
+        description: param.description ?? "",
+        schema: param.schema ?? {},
+      }));
+      return {
+        path: endpoint.path,
+        method: endpoint.method,
+        summary: endpoint.summary ?? "",
+        required_params: allParams.filter((param) => param.required),
+        optional_params: allParams.filter((param) => !param.required),
+        all_params: allParams,
+        response_schema: endpoint.response_schema ?? {},
+      };
+    }),
+    rate_limits: raw.rate_limits ?? {},
+    sdk_languages: raw.sdk_languages ?? [],
+    normalised_at: new Date().toISOString(),
+  };
+}
 
 function buildLoggerOptions(): false | true | { transport: { target: string } } {
   if (config.app.env === "test") {
@@ -157,6 +214,97 @@ export async function buildServer() {
     reply.raw.write(": connected\n\n");
 
     request.raw.on("close", cleanup);
+  });
+
+  fastify.post("/registry/schemas", async (request: FastifyRequest<{
+    Body: {
+      service_id: string;
+      service_name?: string;
+      schema: RawSchemaContract;
+      code_samples?: CodeSample[];
+      changelog?: string;
+      tags?: string[];
+    };
+  }>) => {
+    const claims = requireBearerClaims(request);
+    const service = getService(request.body.service_id);
+    if (!service) {
+      throw Object.assign(new Error("Service not found"), { statusCode: 404, machineCode: "NOT_FOUND" });
+    }
+
+    const normalisedSchema = normaliseSchema(request.body.schema);
+    const published = publishToRegistry(
+      claims.orgId,
+      claims.orgName,
+      request.body.service_id,
+      request.body.service_name ?? service.name,
+      normalisedSchema,
+      request.body.code_samples ?? [],
+      request.body.changelog ?? "",
+      request.body.tags ?? service.tags ?? [],
+    );
+
+    return {
+      registry_id: published.registryId,
+      version: published.version,
+      diff_from_previous: published.diffFromPrevious,
+    };
+  });
+
+  fastify.get("/registry/schemas", async (request: FastifyRequest<{
+    Querystring: {
+      org_id?: string;
+      tags?: string;
+      q?: string;
+      limit?: string;
+    };
+  }>) => ({
+    schemas: listRegistry({
+      orgId: request.query.org_id,
+      tags: request.query.tags ? request.query.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined,
+      q: request.query.q,
+      limit: request.query.limit ? parseInt(request.query.limit, 10) : 20,
+    }),
+  }));
+
+  fastify.get("/registry/schemas/:registry_id", async (request: FastifyRequest<{ Params: { registry_id: string } }>, reply) => {
+    const entry = getRegistryEntry(request.params.registry_id);
+    if (!entry) {
+      reply.code(404);
+      return { error: "Registry entry not found", code: "NOT_FOUND" };
+    }
+    return entry;
+  });
+
+  fastify.get("/registry/services/:service_id/schemas", async (request: FastifyRequest<{ Params: { service_id: string } }>) => ({
+    history: getSchemaHistory(request.params.service_id),
+  }));
+
+  fastify.get("/registry/services/:service_id/latest", async (request: FastifyRequest<{ Params: { service_id: string } }>, reply) => {
+    const entry = getLatestSchema(request.params.service_id);
+    if (!entry) {
+      reply.code(404);
+      return { error: "Registry entry not found", code: "NOT_FOUND" };
+    }
+    return entry;
+  });
+
+  fastify.get("/registry/services/:service_id/diff", async (request: FastifyRequest<{
+    Params: { service_id: string };
+    Querystring: { from?: string; to?: string };
+  }>, reply) => {
+    const fromVersion = request.query.from;
+    const toVersion = request.query.to;
+    if (!fromVersion || !toVersion) {
+      reply.code(400);
+      return { error: "from and to query params are required", code: "VALIDATION_ERROR" };
+    }
+    const schemaDiff = diffRegistryVersions(request.params.service_id, fromVersion, toVersion);
+    if (!schemaDiff) {
+      reply.code(400);
+      return { error: "Registry versions not found", code: "VALIDATION_ERROR" };
+    }
+    return schemaDiff;
   });
 
   fastify.post("/mcp", async (request: FastifyRequest<{ Body: unknown }>, reply) => {

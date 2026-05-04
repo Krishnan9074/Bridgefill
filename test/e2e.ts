@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     assert(body.result?.capabilities?.tools, "Expected capabilities.tools to be defined");
   });
 
-  passed += await runCheck("tools/list returns all 10 tools", async () => {
+  passed += await runCheck("tools/list returns all 13 tools", async () => {
     const response = await server.inject({
       method: "POST",
       url: "/mcp",
@@ -117,7 +117,7 @@ async function main(): Promise<void> {
     });
     const body = response.json() as { result?: { tools?: unknown[] } };
     assert(Array.isArray(body.result?.tools), "Expected result.tools to be an array");
-    assert(body.result!.tools!.length === 10, `Expected 10 tools, received ${body.result!.tools!.length}`);
+    assert(body.result!.tools!.length === 13, `Expected 13 tools, received ${body.result!.tools!.length}`);
   });
 
   passed += await runCheck('tools/call ping returns { status: "ok" }', async () => {
@@ -178,6 +178,8 @@ async function main(): Promise<void> {
   let schemaSessionId2 = "";
   let phase4SessionId = "";
   let llmSessionId = "";
+  let registryServiceId = "";
+  let registryEntryId = "";
 
   passed += await runCheck("POST /auth/token with valid provider API key returns signed JWT", async () => {
     const response = await server.inject({
@@ -830,9 +832,124 @@ async function main(): Promise<void> {
     assert(payload.files.every((file) => file.content.length > 0), "Expected non-empty LLM-generated file content");
   });
 
+  passed += await runCheck("publish_to_registry publishes a schema without a session", async () => {
+    const registerResponse = await callTool(server, 48, "register_service", {
+      org_token: providerToken,
+      service_name: "Registry Places API",
+      service_description: "Standalone registry service",
+      tags: ["maps", "places"],
+    });
+    registryServiceId = (JSON.parse((registerResponse.result as { content: Array<{ text: string }> }).content[0].text) as { service_id: string }).service_id;
+
+    const response = await callTool(server, 49, "publish_to_registry", {
+      org_token: providerToken,
+      service_id: registryServiceId,
+      schema: {
+        base_url: "https://registry.example.com",
+        auth: { type: "api_key", location: "header", key_name: "X-REGISTRY-KEY" },
+        endpoints: [
+          {
+            path: "/v1/places/search",
+            method: "GET",
+            summary: "Search places",
+            parameters: [
+              { name: "query", in: "query", required: true, schema: { type: "string" } },
+            ],
+            response_schema: { type: "object" },
+          },
+        ],
+      },
+      changelog: "Initial registry release",
+      tags: ["maps", "places"],
+    });
+    const payload = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text) as {
+      registry_id: string;
+      version: string;
+    };
+    registryEntryId = payload.registry_id;
+    assert(payload.registry_id.startsWith("reg_"), `Expected registry id, received ${payload.registry_id}`);
+    assert(payload.version === "1.0.0", `Expected 1.0.0, received ${payload.version}`);
+  });
+
+  passed += await runCheck("GET /registry/schemas lists published schemas and supports tag filtering", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/registry/schemas?tags=maps,places",
+    });
+    const payload = response.json() as {
+      schemas: Array<{ serviceId: string; tags: string[] }>;
+    };
+    assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+    assert(payload.schemas.some((entry) => entry.serviceId === registryServiceId), "Expected published registry service in listing");
+  });
+
+  passed += await runCheck("discover_from_registry works without an active session", async () => {
+    const response = await callTool(server, 50, "discover_from_registry", {
+      org_token: consumerToken,
+      service_id: registryServiceId,
+      version: "latest",
+    });
+    const payload = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text) as {
+      registry_id: string;
+      version: string;
+      schema_history: unknown[];
+    };
+    assert(payload.registry_id === registryEntryId, `Expected ${registryEntryId}, received ${payload.registry_id}`);
+    assert(payload.version === "1.0.0", `Expected 1.0.0, received ${payload.version}`);
+    assert(Array.isArray(payload.schema_history), "Expected schema_history array");
+  });
+
+  passed += await runCheck("list_registry MCP tool returns published services", async () => {
+    const response = await callTool(server, 51, "list_registry", {
+      org_token: consumerToken,
+      tags: ["maps"],
+    });
+    const payload = JSON.parse((response.result as { content: Array<{ text: string }> }).content[0].text) as {
+      services: Array<{ service_id: string }>;
+    };
+    assert(payload.services.some((service) => service.service_id === registryServiceId), "Expected list_registry to include published service");
+  });
+
+  passed += await runCheck("registry diff endpoint returns differences between two published versions", async () => {
+    await callTool(server, 52, "publish_to_registry", {
+      org_token: providerToken,
+      service_id: registryServiceId,
+      schema: {
+        base_url: "https://registry.example.com",
+        auth: { type: "api_key", location: "header", key_name: "X-REGISTRY-KEY" },
+        endpoints: [
+          {
+            path: "/v1/places/search",
+            method: "GET",
+            summary: "Search places",
+            parameters: [
+              { name: "query", in: "query", required: true, schema: { type: "string" } },
+              { name: "region", in: "query", required: false, schema: { type: "string" } },
+            ],
+            response_schema: { type: "object" },
+          },
+        ],
+      },
+      changelog: "Added optional region filter",
+      tags: ["maps", "places"],
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/registry/services/${registryServiceId}/diff?from=1.0.0&to=1.1.0`,
+    });
+    const payload = response.json() as {
+      hasDiff: boolean;
+      additiveCount: number;
+    };
+    assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+    assert(payload.hasDiff === true, "Expected diff to exist");
+    assert(payload.additiveCount > 0, "Expected additive diff count");
+  });
+
   await server.close();
 
-  if (passed !== 33) {
+  if (passed !== 38) {
     process.exit(1);
   }
 }

@@ -246,4 +246,49 @@ export const TOOL_DEFINITIONS = [
         },
         additionalProperties: false,
     }),
+    createTool("publish_to_registry", "Publish a normalized schema to the persistent registry.", {
+        type: "object",
+        required: ["org_token", "service_id", "schema"],
+        properties: {
+            org_token: orgTokenProperty,
+            service_id: serviceIdProperty,
+            schema: schemaContract,
+            code_samples: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        language: { type: "string" },
+                        description: { type: "string" },
+                        content: { type: "string" },
+                    },
+                    additionalProperties: true,
+                },
+            },
+            changelog: { type: "string" },
+            tags: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+    }),
+    createTool("discover_from_registry", "Retrieve a published schema from the registry without a session.", {
+        type: "object",
+        required: ["org_token", "service_id"],
+        properties: {
+            org_token: orgTokenProperty,
+            service_id: serviceIdProperty,
+            version: { type: "string", default: "latest" },
+        },
+        additionalProperties: false,
+    }),
+    createTool("list_registry", "List registry-published services and latest schema versions.", {
+        type: "object",
+        required: ["org_token"],
+        properties: {
+            org_token: orgTokenProperty,
+            tags: { type: "array", items: { type: "string" } },
+            q: { type: "string" },
+            limit: { type: "number" },
+        },
+        additionalProperties: false,
+    }),
 ];

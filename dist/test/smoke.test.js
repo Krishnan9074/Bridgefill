@@ -13,7 +13,7 @@ describe("BridgeFill smoke tests", () => {
             serverName: "bridgefill",
             serverVersion: "0.1.0",
         });
-        expect(response.result.tools).toHaveLength(10);
+        expect(response.result.tools).toHaveLength(13);
     });
     test("issued org tokens round-trip through verification", () => {
         const token = issueOrgToken("org_demo_provider", "dev-provider-secret", "provider");
