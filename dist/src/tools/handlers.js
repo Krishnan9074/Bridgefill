@@ -3,6 +3,7 @@ import { config } from "../../config/index.js";
 import { assertToolAllowed, verifyOrgToken } from "../auth/index.js";
 import { auditCodegen, auditSchema, auditSession, auditTool } from "../auth/audit.js";
 import { generateIntegrationCode } from "../codegen/orchestrator.js";
+import { getStores } from "../persistence/index.js";
 import { diffRegistryVersions, getLatestSchema, getSchemaHistory, listRegistry as listRegistryEntries, publishToRegistry, } from "../registry/schema-store.js";
 import { diff, bumpVersion, negotiate } from "../schema/negotiation.js";
 import { appendMessage, attachGeneratedCode, attachSchema, getSession, getSessionByServiceId, getSessionInternal, joinSession as storeJoinSession, } from "../session/store.js";
@@ -109,7 +110,7 @@ export async function registerService(args) {
             providerOrgName: claims.orgName,
             registeredAt: new Date().toISOString(),
         };
-        registerInRegistry(serviceId, service);
+        await registerInRegistry(serviceId, service);
         return {
             service_id: serviceId,
             message: `Service "${args.service_name}" registered.`,
@@ -123,7 +124,7 @@ export async function joinSession(args) {
         if (!service) {
             throw new ValidationError("Service not found");
         }
-        const session = storeJoinSession(args.service_id, claims);
+        const session = await storeJoinSession(args.service_id, claims);
         const participantCount = Object.values(session.participants).filter(Boolean).length;
         if (participantCount === 1) {
             auditSession.created(session.id, args.service_id, claims.orgId, claims.role);
@@ -179,7 +180,7 @@ export async function publishSchema(args) {
         const history = session.schemaHistory ?? [];
         const { version, history: newHistory } = bumpVersion(history, normalised, schemaDiff);
         normalised.version = version;
-        attachSchema(args.session_id, schemaId, {
+        await attachSchema(args.session_id, schemaId, {
             raw: schema,
             normalised,
             codeSamples: session.schema?.codeSamples ?? [],
@@ -190,6 +191,7 @@ export async function publishSchema(args) {
             throw new ValidationError("Session not found");
         }
         internalSession.schemaHistory = newHistory;
+        await getStores().sessions.set(internalSession.id, internalSession);
         auditSchema.published(args.session_id, schemaId, claims.orgId, schema.endpoints.length);
         if (schemaDiff?.hasDiff) {
             auditSchema.diffed(args.session_id, schemaDiff.changes.length);
@@ -277,7 +279,7 @@ export async function generateIntegration(args) {
             consumerContext,
             negotiation: negotiationResult,
         });
-        attachGeneratedCode(args.session_id, generated);
+        await attachGeneratedCode(args.session_id, generated);
         auditSession.completed(args.session_id);
         auditCodegen.completed(args.session_id, generated.files.length, Date.now() - t0);
         return {
@@ -352,7 +354,7 @@ export async function emitMessage(args) {
             orgId: claims.orgId,
             role: claims.role,
         };
-        appendMessage(args.session_id, sessionMessage);
+        await appendMessage(args.session_id, sessionMessage);
         return {
             message_id: sessionMessage.id,
             session_message_count: session.messages.length,
@@ -376,7 +378,7 @@ export async function publishToRegistryTool(args) {
             throw new ValidationError("schema.endpoints must be a non-empty array");
         }
         const normalised = normaliseSchema(args.schema);
-        const { registryId, version, diffFromPrevious, record } = publishToRegistry(claims.orgId, claims.orgName, args.service_id, service.name, normalised, args.code_samples ?? [], args.changelog ?? "", args.tags ?? service.tags ?? []);
+        const { registryId, version, diffFromPrevious, record } = await publishToRegistry(claims.orgId, claims.orgName, args.service_id, service.name, normalised, args.code_samples ?? [], args.changelog ?? "", args.tags ?? service.tags ?? []);
         auditSchema.published(registryId, registryId, claims.orgId, normalised.endpoints.length);
         if (diffFromPrevious?.hasDiff) {
             auditSchema.diffed(registryId, diffFromPrevious.changes.length);
@@ -384,7 +386,7 @@ export async function publishToRegistryTool(args) {
         const session = getSessionByServiceId(args.service_id);
         if (session && session.status === "active") {
             const schemaId = `schema_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-            attachSchema(session.id, schemaId, {
+            await attachSchema(session.id, schemaId, {
                 raw: args.schema,
                 normalised: record.schema,
                 codeSamples: record.codeSamples,
@@ -396,6 +398,7 @@ export async function publishToRegistryTool(args) {
                 isBreaking: entry.isLatest ? !!diffFromPrevious?.breakingCount : false,
                 schema: entry.schema,
             }));
+            await getStores().sessions.set(session.id, session);
         }
         return {
             registry_id: registryId,

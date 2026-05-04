@@ -1,13 +1,6 @@
 import { config } from "../../config/index.js";
-const MAX_ENTRIES = 10_000;
-const log = [];
+import { getStores } from "../persistence/index.js";
 let seq = 0;
-function pushEntry(entry) {
-    log.push(entry);
-    if (log.length > MAX_ENTRIES) {
-        log.shift();
-    }
-}
 export function audit(category, event, context = {}) {
     try {
         const entry = {
@@ -17,7 +10,13 @@ export function audit(category, event, context = {}) {
             event,
             ...context,
         };
-        pushEntry(entry);
+        const stores = getStores();
+        const knownSeq = stores.audit.query({ limit: 1 })[0]?.seq ?? 0;
+        if (seq < knownSeq) {
+            seq = knownSeq;
+            entry.seq = ++seq;
+        }
+        void stores.audit.append(entry);
         if (config.app.env !== "test") {
             void import("../events/bus.js")
                 .then(({ broadcast }) => broadcast(entry))
@@ -103,22 +102,8 @@ export const auditCodegen = {
     },
 };
 export function queryAuditLog({ orgId, category, sessionId, limit = 100 }) {
-    return log
-        .filter((entry) => {
-        if (orgId && entry.orgId !== orgId && entry.initiatorOrgId !== orgId) {
-            return false;
-        }
-        if (category && entry.category !== category) {
-            return false;
-        }
-        if (sessionId && entry.sessionId !== sessionId) {
-            return false;
-        }
-        return true;
-    })
-        .slice(-limit)
-        .reverse();
+    return getStores().audit.query({ orgId, category, sessionId, limit });
 }
 export function auditLogSize() {
-    return log.length;
+    return getStores().audit.count();
 }

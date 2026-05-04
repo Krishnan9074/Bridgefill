@@ -1,9 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { config } from "../../config/index.js";
+import { getStores } from "../persistence/index.js";
 import { auditAuth } from "./audit.js";
-const byHash = new Map();
-const byOrg = new Map();
-const byKeyId = new Map();
 export class ApiKeyError extends Error {
     code;
     machineCode;
@@ -24,17 +22,7 @@ function copyPublicRecord(record) {
     return { ...publicRecord };
 }
 function saveRecord(record) {
-    byHash.set(record.hash, record);
-    byKeyId.set(record.keyId, record);
-    const orgRecords = byOrg.get(record.orgId) ?? [];
-    const existingIndex = orgRecords.findIndex((item) => item.keyId === record.keyId);
-    if (existingIndex >= 0) {
-        orgRecords[existingIndex] = record;
-    }
-    else {
-        orgRecords.push(record);
-    }
-    byOrg.set(record.orgId, orgRecords);
+    void getStores().keys.save(record);
 }
 function buildRecord(orgId, { rawKey, label = null, ttlDays = null, status = "active" }) {
     const now = Date.now();
@@ -59,20 +47,20 @@ function buildRecord(orgId, { rawKey, label = null, ttlDays = null, status = "ac
 function generateRawKey(orgId) {
     return `bf_${orgId}_${randomBytes(24).toString("hex")}`;
 }
-export function createApiKey(orgId, { label = null, ttlDays = null } = {}) {
+export async function createApiKey(orgId, { label = null, ttlDays = null } = {}) {
     if (!config.orgs[orgId]) {
         throw new ApiKeyError("Organization not found", { statusCode: 404, machineCode: "NOT_FOUND" });
     }
     const rawKey = generateRawKey(orgId);
     const record = buildRecord(orgId, { rawKey, label, ttlDays });
-    saveRecord(record);
+    await getStores().keys.save(record);
     return { rawKey, record: copyPublicRecord(record) };
 }
 export function verifyApiKey(rawKey) {
     if (typeof rawKey !== "string" || rawKey.length === 0) {
         throw new ApiKeyError("Invalid API key");
     }
-    const record = byHash.get(hashKey(rawKey));
+    const record = getStores().keys.getByHash(hashKey(rawKey));
     if (!record) {
         throw new ApiKeyError("Invalid API key");
     }
@@ -84,11 +72,15 @@ export function verifyApiKey(rawKey) {
     }
     record.lastUsedAt = new Date().toISOString();
     record.updatedAt = record.lastUsedAt;
+    void getStores().keys.update(record.keyId, {
+        lastUsedAt: record.lastUsedAt,
+        updatedAt: record.updatedAt,
+    });
     auditAuth.keyVerified(record.orgId, record.keyId);
     return record;
 }
-export function rotateKey(keyId, { gracePeriodMs = 60_000 } = {}) {
-    const oldRecord = byKeyId.get(keyId);
+export async function rotateKey(keyId, { gracePeriodMs = 60_000 } = {}) {
+    const oldRecord = getStores().keys.getByKeyId(keyId);
     if (!oldRecord) {
         throw new ApiKeyError("API key not found", { statusCode: 404, machineCode: "NOT_FOUND" });
     }
@@ -118,16 +110,16 @@ export function rotateKey(keyId, { gracePeriodMs = 60_000 } = {}) {
     if (typeof oldRecord._revokeTimer.unref === "function") {
         oldRecord._revokeTimer.unref();
     }
-    saveRecord(oldRecord);
-    saveRecord(newRecord);
+    await getStores().keys.save(oldRecord);
+    await getStores().keys.save(newRecord);
     return {
         rawKey,
         newRecord: copyPublicRecord(newRecord),
         oldRecord: copyPublicRecord(oldRecord),
     };
 }
-export function revokeKey(keyId) {
-    const record = byKeyId.get(keyId);
+export async function revokeKey(keyId) {
+    const record = getStores().keys.getByKeyId(keyId);
     if (!record) {
         throw new ApiKeyError("API key not found", { statusCode: 404, machineCode: "NOT_FOUND" });
     }
@@ -137,15 +129,17 @@ export function revokeKey(keyId) {
     }
     record.status = "revoked";
     record.updatedAt = new Date().toISOString();
+    await getStores().keys.save(record);
     return copyPublicRecord(record);
 }
 export function listOrgKeys(orgId) {
-    return (byOrg.get(orgId) ?? []).map(copyPublicRecord);
+    return getStores().keys.listByOrg(orgId).map(copyPublicRecord);
 }
-export function seedDevKey(orgId, rawKey) {
+export async function seedDevKey(orgId, rawKey) {
     const hash = hashKey(rawKey);
-    if (byHash.has(hash)) {
-        return copyPublicRecord(byHash.get(hash));
+    const existing = getStores().keys.getByHash(hash);
+    if (existing) {
+        return copyPublicRecord(existing);
     }
     const record = buildRecord(orgId, {
         rawKey,
@@ -153,11 +147,13 @@ export function seedDevKey(orgId, rawKey) {
         ttlDays: null,
     });
     record.hash = hash;
-    saveRecord(record);
+    await getStores().keys.save(record);
     return copyPublicRecord(record);
 }
-for (const [orgId, org] of Object.entries(config.orgs)) {
-    if (org.secret) {
-        seedDevKey(orgId, org.secret);
+export async function ensureSeededKeys() {
+    for (const [orgId, org] of Object.entries(config.orgs)) {
+        if (org.secret) {
+            await seedDevKey(orgId, org.secret);
+        }
     }
 }

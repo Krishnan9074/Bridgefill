@@ -1,20 +1,20 @@
 import { buildJobRecord, generateFromRegistry } from "../codegen/standalone.js";
-const jobs = new Map();
-export function createGenerateJob(orgId, request) {
+import { getStores } from "../persistence/index.js";
+export async function createGenerateJob(orgId, request) {
     const job = buildJobRecord(orgId, request);
-    jobs.set(job.jobId, job);
+    await getStores().jobs.set(job.jobId, job);
     return job;
 }
 export function getGenerateJob(jobId) {
-    return jobs.get(jobId) ?? null;
+    return getStores().jobs.get(jobId);
 }
-export function updateGenerateJob(jobId, patch) {
-    const current = jobs.get(jobId);
+export async function updateGenerateJob(jobId, patch) {
+    const current = getStores().jobs.get(jobId);
     if (!current) {
         throw new Error("Job not found");
     }
     const next = { ...current, ...patch };
-    jobs.set(jobId, next);
+    await getStores().jobs.set(jobId, next);
     return next;
 }
 export function runGenerateJob(jobId) {
@@ -23,7 +23,7 @@ export function runGenerateJob(jobId) {
         return;
     }
     setImmediate(async () => {
-        updateGenerateJob(jobId, { status: "running", error: null });
+        await updateGenerateJob(jobId, { status: "running", error: null });
         try {
             const result = await generateFromRegistry({
                 serviceReference: current.request.service_id,
@@ -32,14 +32,14 @@ export function runGenerateJob(jobId) {
                 options: current.request.options,
                 orgId: current.orgId,
             });
-            updateGenerateJob(jobId, {
+            await updateGenerateJob(jobId, {
                 status: "complete",
                 result,
                 completedAt: new Date().toISOString(),
             });
         }
         catch (error) {
-            updateGenerateJob(jobId, {
+            await updateGenerateJob(jobId, {
                 status: "failed",
                 error: error.message,
                 completedAt: new Date().toISOString(),

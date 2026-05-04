@@ -3,11 +3,12 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { config } from "../config/index.js";
 import { issueOrgToken, verifyOrgToken } from "./auth/index.js";
-import { createApiKey, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
+import { createApiKey, ensureSeededKeys, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
 import { auditAuth, queryAuditLog } from "./auth/audit.js";
 import { generateFromRegistry, resolveRegistrySchema, resolveStandaloneAuth, shouldRunAsync, validateGeneratedFiles } from "./codegen/standalone.js";
 import { addClient } from "./events/bus.js";
 import { handleMcpBatch, handleMcpRequest } from "./mcp/router.js";
+import { closeStores, getStoreStatus, initStores } from "./persistence/index.js";
 import { diffRegistryVersions, getLatestSchema, getRegistryEntry, getSchemaHistory, listRegistry, publishToRegistry, } from "./registry/schema-store.js";
 import { createGenerateJob, getGenerateJob, runGenerateJob } from "./routes/generate.js";
 import { getPublicServiceList } from "./tools/service-registry.js";
@@ -94,6 +95,8 @@ function toErrorResponse(error) {
     };
 }
 export async function buildServer() {
+    const stores = await initStores();
+    await ensureSeededKeys();
     const fastify = Fastify({
         logger: buildLoggerOptions(),
     });
@@ -104,13 +107,22 @@ export async function buildServer() {
         reply.code(response.statusCode);
         return response.body;
     });
-    fastify.get("/health", async () => ({
-        status: "ok",
-        server: config.mcp.serverName,
-        version: config.mcp.serverVersion,
-        protocol: config.mcp.protocolVersion,
-        time: new Date().toISOString(),
-    }));
+    fastify.addHook("onClose", async () => {
+        await closeStores();
+    });
+    fastify.get("/health", async () => {
+        const storeStatus = await getStoreStatus();
+        return {
+            status: "ok",
+            server: config.mcp.serverName,
+            version: config.mcp.serverVersion,
+            protocol: config.mcp.protocolVersion,
+            store_backend: storeStatus.backend,
+            db_connected: storeStatus.dbConnected,
+            db_latency_ms: storeStatus.dbLatencyMs,
+            time: new Date().toISOString(),
+        };
+    });
     fastify.get("/llm/status", async () => ({
         provider: config.llm.provider,
         model: config.llm.model,
@@ -131,7 +143,7 @@ export async function buildServer() {
     });
     fastify.post("/auth/keys", async (request) => {
         const { org_id: orgId, label = null, ttl_days: ttlDays = null } = request.body ?? {};
-        const { rawKey, record } = createApiKey(orgId, { label, ttlDays });
+        const { rawKey, record } = await createApiKey(orgId, { label, ttlDays });
         auditAuth.keyCreated(orgId, record.keyId, record.label);
         return {
             raw_key: rawKey,
@@ -146,7 +158,7 @@ export async function buildServer() {
     }));
     fastify.post("/auth/keys/:key_id/rotate", async (request) => {
         const { grace_period_ms: gracePeriodMs = 60_000 } = request.body ?? {};
-        const { rawKey, newRecord, oldRecord } = rotateKey(request.params.key_id, { gracePeriodMs });
+        const { rawKey, newRecord, oldRecord } = await rotateKey(request.params.key_id, { gracePeriodMs });
         auditAuth.keyRotated(oldRecord.orgId, oldRecord.keyId, newRecord.keyId);
         return {
             raw_key: rawKey,
@@ -155,7 +167,7 @@ export async function buildServer() {
         };
     });
     fastify.delete("/auth/keys/:key_id", async (request) => {
-        const record = revokeKey(request.params.key_id);
+        const record = await revokeKey(request.params.key_id);
         auditAuth.keyRevoked(record.orgId, record.keyId, "manual_revoke");
         return {
             revoked: true,
@@ -186,7 +198,7 @@ export async function buildServer() {
             throw Object.assign(new Error("Service not found"), { statusCode: 404, machineCode: "NOT_FOUND" });
         }
         const normalisedSchema = normaliseSchema(request.body.schema);
-        const published = publishToRegistry(claims.orgId, claims.orgName, request.body.service_id, request.body.service_name ?? service.name, normalisedSchema, request.body.code_samples ?? [], request.body.changelog ?? "", request.body.tags ?? service.tags ?? []);
+        const published = await publishToRegistry(claims.orgId, claims.orgName, request.body.service_id, request.body.service_name ?? service.name, normalisedSchema, request.body.code_samples ?? [], request.body.changelog ?? "", request.body.tags ?? service.tags ?? []);
         return {
             registry_id: published.registryId,
             version: published.version,
@@ -242,7 +254,7 @@ export async function buildServer() {
         const body = request.body ?? {};
         const resolved = resolveRegistrySchema(body.service_id, body.version ?? "latest");
         if (shouldRunAsync(resolved.entry, body.options, body.consumer_context)) {
-            const job = createGenerateJob(auth.orgId, body);
+            const job = await createGenerateJob(auth.orgId, body);
             runGenerateJob(job.jobId);
             reply.code(202);
             return {
@@ -354,6 +366,8 @@ export async function buildServer() {
 }
 export async function startServer() {
     const fastify = await buildServer();
+    const storeStatus = await getStoreStatus();
+    fastify.log.info(`Store backend: ${storeStatus.backend}`);
     await fastify.listen({
         host: config.server.host,
         port: config.server.port,

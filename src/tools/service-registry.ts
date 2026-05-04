@@ -1,20 +1,21 @@
 import type { ServiceEntry } from "../types.js";
+import { getStores } from "../persistence/index.js";
 
-const serviceRegistry = new Map<string, ServiceEntry>();
-
-export function registerInRegistry(serviceId: string, entry: ServiceEntry): ServiceEntry {
-  serviceRegistry.set(serviceId, { ...entry, id: serviceId });
-  return serviceRegistry.get(serviceId)!;
+export async function registerInRegistry(serviceId: string, entry: ServiceEntry): Promise<ServiceEntry> {
+  const stores = getStores();
+  const next = { ...entry, id: serviceId };
+  await stores.services.set(serviceId, next);
+  return next;
 }
 
 export function getPublicServiceList(): ServiceEntry[] {
-  return Array.from(serviceRegistry.values());
+  return getStores().services.list();
 }
 
 export function getService(serviceId: string): ServiceEntry | null {
-  return serviceRegistry.get(serviceId) ?? null;
+  return getStores().services.get(serviceId);
 }
 
 export function hasService(serviceId: string): boolean {
-  return serviceRegistry.has(serviceId);
+  return getStores().services.has(serviceId);
 }

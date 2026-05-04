@@ -1,9 +1,16 @@
 import { issueOrgToken, verifyOrgToken } from "../src/auth/index.js";
 import { config } from "../config/index.js";
+import { ensureSeededKeys } from "../src/auth/api-keys.js";
 import { handleMcpRequest } from "../src/mcp/router.js";
+import { initStores } from "../src/persistence/index.js";
 import { bumpVersion, detectConflicts, diff } from "../src/schema/negotiation.js";
 
 describe("BridgeFill smoke tests", () => {
+  beforeAll(async () => {
+    await initStores({ backend: "memory", force: true });
+    await ensureSeededKeys();
+  });
+
   test("tools/list exposes thirteen MCP tools", async () => {
     const response = await handleMcpRequest(
       {

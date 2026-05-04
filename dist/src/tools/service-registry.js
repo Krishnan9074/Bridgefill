@@ -1,14 +1,16 @@
-const serviceRegistry = new Map();
-export function registerInRegistry(serviceId, entry) {
-    serviceRegistry.set(serviceId, { ...entry, id: serviceId });
-    return serviceRegistry.get(serviceId);
+import { getStores } from "../persistence/index.js";
+export async function registerInRegistry(serviceId, entry) {
+    const stores = getStores();
+    const next = { ...entry, id: serviceId };
+    await stores.services.set(serviceId, next);
+    return next;
 }
 export function getPublicServiceList() {
-    return Array.from(serviceRegistry.values());
+    return getStores().services.list();
 }
 export function getService(serviceId) {
-    return serviceRegistry.get(serviceId) ?? null;
+    return getStores().services.get(serviceId);
 }
 export function hasService(serviceId) {
-    return serviceRegistry.has(serviceId);
+    return getStores().services.has(serviceId);
 }

@@ -4,11 +4,12 @@ import websocket from "@fastify/websocket";
 
 import { config } from "../config/index.js";
 import { issueOrgToken, verifyOrgToken } from "./auth/index.js";
-import { createApiKey, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
+import { createApiKey, ensureSeededKeys, listOrgKeys, revokeKey, rotateKey } from "./auth/api-keys.js";
 import { auditAuth, queryAuditLog } from "./auth/audit.js";
 import { generateFromRegistry, resolveRegistrySchema, resolveStandaloneAuth, shouldRunAsync, StandaloneRequestError, validateGeneratedFiles } from "./codegen/standalone.js";
 import { addClient } from "./events/bus.js";
 import { handleMcpBatch, handleMcpRequest } from "./mcp/router.js";
+import { closeStores, getStoreStatus, initStores } from "./persistence/index.js";
 import {
   diffRegistryVersions,
   getLatestSchema,
@@ -119,6 +120,8 @@ function toErrorResponse(error: FastifyError & { statusCode?: number; machineCod
 }
 
 export async function buildServer() {
+  const stores = await initStores();
+  await ensureSeededKeys();
   const fastify = Fastify({
     logger: buildLoggerOptions(),
   });
@@ -132,13 +135,23 @@ export async function buildServer() {
     return response.body;
   });
 
-  fastify.get("/health", async () => ({
-    status: "ok",
-    server: config.mcp.serverName,
-    version: config.mcp.serverVersion,
-    protocol: config.mcp.protocolVersion,
-    time: new Date().toISOString(),
-  }));
+  fastify.addHook("onClose", async () => {
+    await closeStores();
+  });
+
+  fastify.get("/health", async () => {
+    const storeStatus = await getStoreStatus();
+    return {
+      status: "ok",
+      server: config.mcp.serverName,
+      version: config.mcp.serverVersion,
+      protocol: config.mcp.protocolVersion,
+      store_backend: storeStatus.backend,
+      db_connected: storeStatus.dbConnected,
+      db_latency_ms: storeStatus.dbLatencyMs,
+      time: new Date().toISOString(),
+    };
+  });
 
   fastify.get("/llm/status", async () => ({
     provider: config.llm.provider,
@@ -162,7 +175,7 @@ export async function buildServer() {
 
   fastify.post("/auth/keys", async (request: FastifyRequest<{ Body: { org_id: string; label?: string | null; ttl_days?: number | null } }>) => {
     const { org_id: orgId, label = null, ttl_days: ttlDays = null } = request.body ?? {};
-    const { rawKey, record } = createApiKey(orgId, { label, ttlDays });
+    const { rawKey, record } = await createApiKey(orgId, { label, ttlDays });
     auditAuth.keyCreated(orgId, record.keyId, record.label);
     return {
       raw_key: rawKey,
@@ -179,7 +192,7 @@ export async function buildServer() {
 
   fastify.post("/auth/keys/:key_id/rotate", async (request: FastifyRequest<{ Params: { key_id: string }; Body: { grace_period_ms?: number } }>) => {
     const { grace_period_ms: gracePeriodMs = 60_000 } = request.body ?? {};
-    const { rawKey, newRecord, oldRecord } = rotateKey(request.params.key_id, { gracePeriodMs });
+    const { rawKey, newRecord, oldRecord } = await rotateKey(request.params.key_id, { gracePeriodMs });
     auditAuth.keyRotated(oldRecord.orgId, oldRecord.keyId, newRecord.keyId);
     return {
       raw_key: rawKey,
@@ -189,7 +202,7 @@ export async function buildServer() {
   });
 
   fastify.delete("/auth/keys/:key_id", async (request: FastifyRequest<{ Params: { key_id: string } }>) => {
-    const record = revokeKey(request.params.key_id);
+    const record = await revokeKey(request.params.key_id);
     auditAuth.keyRevoked(record.orgId, record.keyId, "manual_revoke");
     return {
       revoked: true,
@@ -235,7 +248,7 @@ export async function buildServer() {
     }
 
     const normalisedSchema = normaliseSchema(request.body.schema);
-    const published = publishToRegistry(
+    const published = await publishToRegistry(
       claims.orgId,
       claims.orgName,
       request.body.service_id,
@@ -321,7 +334,7 @@ export async function buildServer() {
     const resolved = resolveRegistrySchema(body.service_id, body.version ?? "latest");
 
     if (shouldRunAsync(resolved.entry, body.options, body.consumer_context)) {
-      const job = createGenerateJob(auth.orgId, body);
+      const job = await createGenerateJob(auth.orgId, body);
       runGenerateJob(job.jobId);
       reply.code(202);
       return {
@@ -459,6 +472,8 @@ export async function buildServer() {
 
 export async function startServer() {
   const fastify = await buildServer();
+  const storeStatus = await getStoreStatus();
+  fastify.log.info(`Store backend: ${storeStatus.backend}`);
   await fastify.listen({
     host: config.server.host,
     port: config.server.port,

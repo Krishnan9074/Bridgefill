@@ -1,4 +1,5 @@
 import { config } from "../../config/index.js";
+import { getStores } from "../persistence/index.js";
 
 interface AuditEntry {
   seq: number;
@@ -8,16 +9,7 @@ interface AuditEntry {
   [key: string]: unknown;
 }
 
-const MAX_ENTRIES = 10_000;
-const log: AuditEntry[] = [];
 let seq = 0;
-
-function pushEntry(entry: AuditEntry): void {
-  log.push(entry);
-  if (log.length > MAX_ENTRIES) {
-    log.shift();
-  }
-}
 
 export function audit(category: string, event: string, context: Record<string, unknown> = {}): void {
   try {
@@ -29,7 +21,13 @@ export function audit(category: string, event: string, context: Record<string, u
       ...context,
     };
 
-    pushEntry(entry);
+    const stores = getStores();
+    const knownSeq = stores.audit.query({ limit: 1 })[0]?.seq ?? 0;
+    if (seq < knownSeq) {
+      seq = knownSeq;
+      entry.seq = ++seq;
+    }
+    void stores.audit.append(entry);
 
     if (config.app.env !== "test") {
       void import("../events/bus.js")
@@ -126,23 +124,9 @@ export function queryAuditLog({ orgId, category, sessionId, limit = 100 }: {
   sessionId?: string;
   limit?: number;
 }): AuditEntry[] {
-  return log
-    .filter((entry) => {
-      if (orgId && entry.orgId !== orgId && entry.initiatorOrgId !== orgId) {
-        return false;
-      }
-      if (category && entry.category !== category) {
-        return false;
-      }
-      if (sessionId && entry.sessionId !== sessionId) {
-        return false;
-      }
-      return true;
-    })
-    .slice(-limit)
-    .reverse();
+  return getStores().audit.query({ orgId, category, sessionId, limit });
 }
 
 export function auditLogSize(): number {
-  return log.length;
+  return getStores().audit.count();
 }

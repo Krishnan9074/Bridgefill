@@ -1,25 +1,24 @@
 import type { GenerateJobRecord, StandaloneGenerateRequest, StandaloneGenerateResponse } from "../types.js";
 import { buildJobRecord, generateFromRegistry } from "../codegen/standalone.js";
+import { getStores } from "../persistence/index.js";
 
-const jobs = new Map<string, GenerateJobRecord>();
-
-export function createGenerateJob(orgId: string, request: StandaloneGenerateRequest): GenerateJobRecord {
+export async function createGenerateJob(orgId: string, request: StandaloneGenerateRequest): Promise<GenerateJobRecord> {
   const job = buildJobRecord(orgId, request);
-  jobs.set(job.jobId, job);
+  await getStores().jobs.set(job.jobId, job);
   return job;
 }
 
 export function getGenerateJob(jobId: string): GenerateJobRecord | null {
-  return jobs.get(jobId) ?? null;
+  return getStores().jobs.get(jobId);
 }
 
-export function updateGenerateJob(jobId: string, patch: Partial<GenerateJobRecord>): GenerateJobRecord {
-  const current = jobs.get(jobId);
+export async function updateGenerateJob(jobId: string, patch: Partial<GenerateJobRecord>): Promise<GenerateJobRecord> {
+  const current = getStores().jobs.get(jobId);
   if (!current) {
     throw new Error("Job not found");
   }
   const next = { ...current, ...patch };
-  jobs.set(jobId, next);
+  await getStores().jobs.set(jobId, next);
   return next;
 }
 
@@ -30,7 +29,7 @@ export function runGenerateJob(jobId: string): void {
   }
 
   setImmediate(async () => {
-    updateGenerateJob(jobId, { status: "running", error: null });
+    await updateGenerateJob(jobId, { status: "running", error: null });
 
     try {
       const result: StandaloneGenerateResponse = await generateFromRegistry({
@@ -40,13 +39,13 @@ export function runGenerateJob(jobId: string): void {
         options: current.request.options,
         orgId: current.orgId,
       });
-      updateGenerateJob(jobId, {
+      await updateGenerateJob(jobId, {
         status: "complete",
         result,
         completedAt: new Date().toISOString(),
       });
     } catch (error) {
-      updateGenerateJob(jobId, {
+      await updateGenerateJob(jobId, {
         status: "failed",
         error: (error as Error).message,
         completedAt: new Date().toISOString(),

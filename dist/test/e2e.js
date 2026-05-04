@@ -69,6 +69,11 @@ async function main() {
         const body = response.json();
         assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
         assert(body.status === "ok", `Expected status=ok, received ${body.status}`);
+        assert(body.store_backend === (process.env.STORE_BACKEND ?? "memory"), `Expected store backend ${(process.env.STORE_BACKEND ?? "memory")}, received ${body.store_backend}`);
+        if ((process.env.STORE_BACKEND ?? "memory") === "memory") {
+            assert(body.db_connected === null, `Expected db_connected=null, received ${body.db_connected}`);
+            assert(body.db_latency_ms === null, `Expected db_latency_ms=null, received ${body.db_latency_ms}`);
+        }
     });
     passed += await runCheck("GET /llm/status returns current LLM config", async () => {
         const response = await server.inject({

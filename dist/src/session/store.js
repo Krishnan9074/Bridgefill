@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../../config/index.js";
 import { auditSession } from "../auth/audit.js";
-const sessions = new Map();
-const sessionById = new Map();
+import { getStores } from "../persistence/index.js";
+const expiryTimers = new Map();
 export class SessionError extends Error {
     code;
     machineCode;
@@ -23,13 +23,15 @@ function buildParticipant(joinerClaims) {
     };
 }
 function expirePendingSession(serviceId, sessionId) {
-    const session = sessionById.get(sessionId);
+    const session = getStores().sessions.get(sessionId);
     if (!session || session.status !== "pending") {
         return;
     }
     session.status = "expired";
     session._expiryTimer = null;
-    sessions.delete(serviceId);
+    expiryTimers.delete(sessionId);
+    void getStores().sessions.set(sessionId, session);
+    void getStores().sessions.indexByServiceId(serviceId, null);
     auditSession.expired(sessionId, "handshake_timeout");
 }
 function createExpiryTimer(serviceId, sessionId) {
@@ -39,13 +41,12 @@ function createExpiryTimer(serviceId, sessionId) {
     }
     return timer;
 }
-export function joinSession(serviceId, joinerClaims) {
+export async function joinSession(serviceId, joinerClaims) {
     const role = joinerClaims.role;
     if (!role || !["provider", "consumer"].includes(role)) {
         throw new SessionError("joinerClaims.role must be provider or consumer");
     }
-    const existingSessionId = sessions.get(serviceId);
-    const existingSession = existingSessionId ? sessionById.get(existingSessionId) ?? null : null;
+    const existingSession = getStores().sessions.getByServiceId(serviceId);
     if (!existingSession || existingSession.status === "expired" || existingSession.status === "complete") {
         const sessionId = randomUUID();
         const session = {
@@ -63,8 +64,9 @@ export function joinSession(serviceId, joinerClaims) {
             messages: [],
             _expiryTimer: createExpiryTimer(serviceId, sessionId),
         };
-        sessions.set(serviceId, sessionId);
-        sessionById.set(sessionId, session);
+        expiryTimers.set(sessionId, session._expiryTimer);
+        await getStores().sessions.set(sessionId, session);
+        await getStores().sessions.indexByServiceId(serviceId, sessionId);
         return session;
     }
     const currentParticipant = existingSession.participants[role];
@@ -75,15 +77,18 @@ export function joinSession(serviceId, joinerClaims) {
     if (existingSession.participants.provider && existingSession.participants.consumer) {
         existingSession.status = "active";
         existingSession.activatedAt = new Date().toISOString();
-        if (existingSession._expiryTimer) {
-            clearTimeout(existingSession._expiryTimer);
+        const expiryTimer = expiryTimers.get(existingSession.id) ?? existingSession._expiryTimer;
+        if (expiryTimer) {
+            clearTimeout(expiryTimer);
+            expiryTimers.delete(existingSession.id);
             existingSession._expiryTimer = null;
         }
     }
+    await getStores().sessions.set(existingSession.id, existingSession);
     return existingSession;
 }
 export function getSession(sessionId, callerOrgId) {
-    const session = sessionById.get(sessionId);
+    const session = getStores().sessions.get(sessionId);
     if (!session) {
         throw new SessionError("Session not found");
     }
@@ -94,16 +99,12 @@ export function getSession(sessionId, callerOrgId) {
     return session;
 }
 export function getSessionInternal(sessionId) {
-    return sessionById.get(sessionId) ?? null;
+    return getStores().sessions.get(sessionId);
 }
 export function getSessionByServiceId(serviceId) {
-    const sessionId = sessions.get(serviceId);
-    if (!sessionId) {
-        return null;
-    }
-    return sessionById.get(sessionId) ?? null;
+    return getStores().sessions.getByServiceId(serviceId);
 }
-export function attachSchema(sessionId, schemaId, schema) {
+export async function attachSchema(sessionId, schemaId, schema) {
     const session = getSessionInternal(sessionId);
     if (!session) {
         throw new SessionError("Session not found");
@@ -112,35 +113,42 @@ export function attachSchema(sessionId, schemaId, schema) {
         id: schemaId,
         ...schema,
     };
+    await getStores().sessions.set(session.id, session);
     return session.schema;
 }
-export function attachGeneratedCode(sessionId, code) {
+export async function attachGeneratedCode(sessionId, code) {
     const session = getSessionInternal(sessionId);
     if (!session) {
         throw new SessionError("Session not found");
     }
     session.generatedCode = code;
     session.status = "complete";
+    await getStores().sessions.set(session.id, session);
+    await getStores().sessions.indexByServiceId(session.serviceId, null);
     return session.generatedCode;
 }
-export function appendMessage(sessionId, message) {
+export async function appendMessage(sessionId, message) {
     const session = getSessionInternal(sessionId);
     if (!session) {
         throw new SessionError("Session not found");
     }
     session.messages.push(message);
+    await getStores().sessions.set(session.id, session);
     return message;
 }
-export function closeSession(sessionId) {
+export async function closeSession(sessionId) {
     const session = getSessionInternal(sessionId);
     if (!session) {
         throw new SessionError("Session not found");
     }
-    if (session._expiryTimer) {
-        clearTimeout(session._expiryTimer);
+    const expiryTimer = expiryTimers.get(session.id) ?? session._expiryTimer;
+    if (expiryTimer) {
+        clearTimeout(expiryTimer);
+        expiryTimers.delete(session.id);
         session._expiryTimer = null;
     }
     session.status = "complete";
-    sessions.delete(session.serviceId);
+    await getStores().sessions.set(session.id, session);
+    await getStores().sessions.indexByServiceId(session.serviceId, null);
     return session;
 }
