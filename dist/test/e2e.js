@@ -1,0 +1,552 @@
+function assert(condition, message) {
+    if (!condition) {
+        throw new Error(message);
+    }
+}
+function pass(message) {
+    process.stdout.write(`\u2713 PASS ${message}\n`);
+}
+function fail(message, error) {
+    process.stdout.write(`\u2717 FAIL ${message}\n`);
+    if (error) {
+        process.stderr.write(`${error.message}\n`);
+    }
+}
+async function runCheck(message, fn) {
+    try {
+        await fn();
+        pass(message);
+        return 1;
+    }
+    catch (error) {
+        fail(message, error);
+        return 0;
+    }
+}
+async function issueToken(server, payload) {
+    const response = await server.inject({
+        method: "POST",
+        url: "/auth/token",
+        payload,
+    });
+    return response.json();
+}
+async function callTool(server, id, name, args) {
+    const response = await server.inject({
+        method: "POST",
+        url: "/mcp",
+        payload: {
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: {
+                name,
+                arguments: args,
+            },
+        },
+    });
+    return response.json();
+}
+async function main() {
+    process.env.NODE_ENV = "test";
+    const { buildServer } = await import("../src/server.js");
+    const server = await buildServer();
+    let passed = 0;
+    passed += await runCheck('GET /health returns { status: "ok" }', async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/health",
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(body.status === "ok", `Expected status=ok, received ${body.status}`);
+    });
+    passed += await runCheck("POST /mcp initialize returns capabilities with tools key", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/mcp",
+            payload: {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "initialize",
+                params: {},
+            },
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(body.result?.capabilities?.tools, "Expected capabilities.tools to be defined");
+    });
+    passed += await runCheck("tools/list returns all 10 tools", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/mcp",
+            payload: {
+                jsonrpc: "2.0",
+                id: 2,
+                method: "tools/list",
+            },
+        });
+        const body = response.json();
+        assert(Array.isArray(body.result?.tools), "Expected result.tools to be an array");
+        assert(body.result.tools.length === 10, `Expected 10 tools, received ${body.result.tools.length}`);
+    });
+    passed += await runCheck('tools/call ping returns { status: "ok" }', async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/mcp",
+            payload: {
+                jsonrpc: "2.0",
+                id: 3,
+                method: "tools/call",
+                params: {
+                    name: "ping",
+                    arguments: {},
+                },
+            },
+        });
+        const body = response.json();
+        const toolPayload = JSON.parse(body.result.content[0].text);
+        assert(toolPayload.status === "ok", `Expected status=ok, received ${toolPayload.status}`);
+    });
+    passed += await runCheck("tools/call with unknown tool returns JSON-RPC error -32601", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/mcp",
+            payload: {
+                jsonrpc: "2.0",
+                id: 4,
+                method: "tools/call",
+                params: {
+                    name: "missing_tool",
+                    arguments: {},
+                },
+            },
+        });
+        const body = response.json();
+        assert(body.error?.code === -32601, `Expected error code -32601, received ${body.error?.code}`);
+    });
+    passed += await runCheck("GET /services returns { services: [] }", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/services",
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(Array.isArray(body.services), "Expected services to be an array");
+        assert(body.services.length === 0, `Expected 0 services, received ${body.services.length}`);
+    });
+    let providerToken = "";
+    let consumerToken = "";
+    let serviceId = "";
+    let sessionId = "";
+    let rotatedKeyId = "";
+    let oldRotatedRawKey = "";
+    let schemaSessionId = "";
+    let schemaSessionId2 = "";
+    passed += await runCheck("POST /auth/token with valid provider API key returns signed JWT", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/auth/token",
+            payload: {
+                org_id: "org_demo_provider",
+                api_key: "dev-provider-secret",
+                role: "provider",
+            },
+        });
+        const body = response.json();
+        providerToken = body.token;
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(typeof body.token === "string" && body.token.length > 20, "Expected a signed JWT");
+    });
+    passed += await runCheck("Provider JWT contains jti, keyId, allowedTools, and role", async () => {
+        const [, payload] = providerToken.split(".");
+        const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+        assert(typeof claims.jti === "string", "Expected jti");
+        assert(typeof claims.keyId === "string", "Expected keyId");
+        assert(Array.isArray(claims.allowedTools), "Expected allowedTools");
+        assert(claims.role === "provider", `Expected role=provider, received ${claims.role}`);
+    });
+    passed += await runCheck("Consumer API key can also mint a scoped consumer token", async () => {
+        const body = await issueToken(server, {
+            org_id: "org_demo_consumer",
+            api_key: "dev-consumer-secret",
+            role: "consumer",
+        });
+        consumerToken = body.token;
+        assert(typeof consumerToken === "string", "Expected consumer token");
+    });
+    passed += await runCheck("Provider can register a service with the scoped token", async () => {
+        const response = await callTool(server, 5, "register_service", {
+            org_token: providerToken,
+            service_name: "Maps API",
+            service_description: "Provider test service",
+        });
+        const toolPayload = JSON.parse(response.result.content[0].text);
+        serviceId = toolPayload.service_id;
+        assert(typeof serviceId === "string" && serviceId.startsWith("svc_"), "Expected service id");
+    });
+    passed += await runCheck("Provider can join a session for the new service", async () => {
+        const response = await callTool(server, 6, "join_session", {
+            org_token: providerToken,
+            service_id: serviceId,
+        });
+        const toolPayload = JSON.parse(response.result.content[0].text);
+        sessionId = toolPayload.session_id;
+        assert(toolPayload.status === "pending", `Expected pending, received ${toolPayload.status}`);
+    });
+    passed += await runCheck("Consumer can join the same session and activate it", async () => {
+        const response = await callTool(server, 7, "join_session", {
+            org_token: consumerToken,
+            service_id: serviceId,
+        });
+        const toolPayload = JSON.parse(response.result.content[0].text);
+        assert(toolPayload.status === "active", `Expected active, received ${toolPayload.status}`);
+    });
+    passed += await runCheck("Provider token cannot call discover_schema", async () => {
+        const response = await callTool(server, 8, "discover_schema", {
+            org_token: providerToken,
+            session_id: sessionId,
+        });
+        assert(response.error.code === -32001, `Expected -32001, received ${response.error.code}`);
+    });
+    passed += await runCheck("Consumer token cannot call publish_schema", async () => {
+        const response = await callTool(server, 9, "publish_schema", {
+            org_token: consumerToken,
+            session_id: sessionId,
+            schema: { base_url: "https://api.example.com", auth: { type: "none" }, endpoints: [] },
+        });
+        assert(response.error.code === -32001, `Expected -32001, received ${response.error.code}`);
+    });
+    passed += await runCheck("POST /auth/keys creates a new API key and exposes it once", async () => {
+        const response = await server.inject({
+            method: "POST",
+            url: "/auth/keys",
+            payload: {
+                org_id: "org_demo_provider",
+                label: "phase2-test-key",
+            },
+        });
+        const body = response.json();
+        rotatedKeyId = body.key_id;
+        oldRotatedRawKey = body.raw_key;
+        assert(typeof body.raw_key === "string" && body.raw_key.startsWith("bf_org_demo_provider_"), "Expected raw key");
+        assert(typeof body.key_id === "string", "Expected key id");
+    });
+    passed += await runCheck("Key rotation leaves old key usable during grace period", async () => {
+        const rotateResponse = await server.inject({
+            method: "POST",
+            url: `/auth/keys/${rotatedKeyId}/rotate`,
+            payload: { grace_period_ms: 50 },
+        });
+        assert(rotateResponse.statusCode === 200, `Expected 200, received ${rotateResponse.statusCode}`);
+        const tokenResponse = await server.inject({
+            method: "POST",
+            url: "/auth/token",
+            payload: {
+                org_id: "org_demo_provider",
+                api_key: oldRotatedRawKey,
+                role: "provider",
+            },
+        });
+        const tokenBody = tokenResponse.json();
+        assert(tokenResponse.statusCode === 200, `Expected 200, received ${tokenResponse.statusCode}`);
+        assert(typeof tokenBody.token === "string", "Expected old rotating key to still mint tokens");
+    });
+    passed += await runCheck("Old rotated key is rejected after the grace period", async () => {
+        const createdKeyResponse = await server.inject({
+            method: "POST",
+            url: "/auth/keys",
+            payload: {
+                org_id: "org_demo_consumer",
+                label: "grace-window-key",
+            },
+        });
+        const createdKeyBody = createdKeyResponse.json();
+        const oldRawKey = createdKeyBody.raw_key;
+        const keyId = createdKeyBody.key_id;
+        await server.inject({
+            method: "POST",
+            url: `/auth/keys/${keyId}/rotate`,
+            payload: { grace_period_ms: 30 },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        const response = await server.inject({
+            method: "POST",
+            url: "/auth/token",
+            payload: {
+                org_id: "org_demo_consumer",
+                api_key: oldRawKey,
+                role: "consumer",
+            },
+        });
+        const body = response.json();
+        assert(response.statusCode === 401, `Expected 401, received ${response.statusCode}`);
+        assert(body.code === "AUTH_ERROR", `Expected AUTH_ERROR, received ${body.code}`);
+    });
+    passed += await runCheck("Revoked key is rejected immediately", async () => {
+        const createdKeyResponse = await server.inject({
+            method: "POST",
+            url: "/auth/keys",
+            payload: {
+                org_id: "org_demo",
+                label: "revoke-me",
+            },
+        });
+        const createdKeyBody = createdKeyResponse.json();
+        await server.inject({
+            method: "DELETE",
+            url: `/auth/keys/${createdKeyBody.key_id}`,
+        });
+        const response = await server.inject({
+            method: "POST",
+            url: "/auth/token",
+            payload: {
+                org_id: "org_demo",
+                api_key: createdKeyBody.raw_key,
+                role: "consumer",
+            },
+        });
+        assert(response.statusCode === 401, `Expected 401, received ${response.statusCode}`);
+    });
+    passed += await runCheck("GET /audit returns events for auth operations", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/audit?category=auth&limit=20",
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(Array.isArray(body.entries) && body.entries.length > 0, "Expected auth audit entries");
+    });
+    passed += await runCheck('Publish schema v1 gets version "1.0.0"', async () => {
+        const registerResponse = await callTool(server, 20, "register_service", {
+            org_token: providerToken,
+            service_name: "Search API",
+            service_description: "Schema phase service",
+        });
+        const newServiceId = JSON.parse(registerResponse.result.content[0].text).service_id;
+        const providerJoin = await callTool(server, 21, "join_session", {
+            org_token: providerToken,
+            service_id: newServiceId,
+        });
+        schemaSessionId = JSON.parse(providerJoin.result.content[0].text).session_id;
+        await callTool(server, 22, "join_session", {
+            org_token: consumerToken,
+            service_id: newServiceId,
+        });
+        const publishResponse = await callTool(server, 23, "publish_schema", {
+            org_token: providerToken,
+            session_id: schemaSessionId,
+            schema: {
+                base_url: "https://api.search.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-API-Key" },
+                endpoints: [
+                    {
+                        path: "/v1/search",
+                        method: "GET",
+                        summary: "Search for places",
+                        parameters: [
+                            { name: "query", in: "query", required: true, schema: { type: "string" } },
+                            { name: "page", in: "query", required: false, schema: { type: "number" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                    {
+                        path: "/v1/suggest",
+                        method: "GET",
+                        summary: "Suggest places",
+                        parameters: [
+                            { name: "query", in: "query", required: true, schema: { type: "string" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+                rate_limits: { requests_per_second: 5, requests_per_day: 1000 },
+                sdk_languages: ["javascript"],
+            },
+        });
+        const payload = JSON.parse(publishResponse.result.content[0].text);
+        assert(payload.version === "1.0.0", `Expected 1.0.0, received ${payload.version}`);
+    });
+    passed += await runCheck('Publish schema v2 with removed endpoint and new required param gets "2.0.0" with 2 breaking changes', async () => {
+        const publishResponse = await callTool(server, 24, "publish_schema", {
+            org_token: providerToken,
+            session_id: schemaSessionId,
+            schema: {
+                base_url: "https://api.search.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-API-Key" },
+                endpoints: [
+                    {
+                        path: "/v1/search",
+                        method: "GET",
+                        summary: "Search for places",
+                        parameters: [
+                            { name: "query", in: "query", required: true, schema: { type: "string" } },
+                            { name: "region", in: "query", required: true, schema: { type: "string" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+                rate_limits: { requests_per_second: 5, requests_per_day: 1000 },
+                sdk_languages: ["javascript"],
+            },
+        });
+        const payload = JSON.parse(publishResponse.result.content[0].text);
+        assert(payload.version === "2.0.0", `Expected 2.0.0, received ${payload.version}`);
+        assert(payload.diff_summary.breaking === 2, `Expected 2 breaking changes, received ${payload.diff_summary.breaking}`);
+        assert(payload.diff_summary.warnings === 0, `Expected 0 warnings, received ${payload.diff_summary.warnings}`);
+    });
+    passed += await runCheck('discover_schema returns version history with 2 entries', async () => {
+        const response = await callTool(server, 25, "discover_schema", {
+            org_token: consumerToken,
+            session_id: schemaSessionId,
+        });
+        const payload = JSON.parse(response.result.content[0].text);
+        assert(Array.isArray(payload.version_history), "Expected version history array");
+        assert(payload.version_history.length === 2, `Expected 2 history entries, received ${payload.version_history.length}`);
+    });
+    passed += await runCheck('Publish schema with only a new optional param gets "1.1.0"', async () => {
+        const registerResponse = await callTool(server, 26, "register_service", {
+            org_token: providerToken,
+            service_name: "Maps Nearby API",
+            service_description: "Optional param scenario",
+        });
+        const serviceId2 = JSON.parse(registerResponse.result.content[0].text).service_id;
+        const providerJoin = await callTool(server, 27, "join_session", {
+            org_token: providerToken,
+            service_id: serviceId2,
+        });
+        schemaSessionId2 = JSON.parse(providerJoin.result.content[0].text).session_id;
+        await callTool(server, 28, "join_session", {
+            org_token: consumerToken,
+            service_id: serviceId2,
+        });
+        await callTool(server, 29, "publish_schema", {
+            org_token: providerToken,
+            session_id: schemaSessionId2,
+            schema: {
+                base_url: "https://maps.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-Maps-Key" },
+                endpoints: [
+                    {
+                        path: "/v1/nearby",
+                        method: "GET",
+                        summary: "Nearby places",
+                        parameters: [
+                            { name: "lat", in: "query", required: true, schema: { type: "number" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+            },
+        });
+        const publishResponse = await callTool(server, 30, "publish_schema", {
+            org_token: providerToken,
+            session_id: schemaSessionId2,
+            schema: {
+                base_url: "https://maps.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-Maps-Key" },
+                endpoints: [
+                    {
+                        path: "/v1/nearby",
+                        method: "GET",
+                        summary: "Nearby places",
+                        parameters: [
+                            { name: "lat", in: "query", required: true, schema: { type: "number" } },
+                            { name: "radius", in: "query", required: false, schema: { type: "number" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+            },
+        });
+        const payload = JSON.parse(publishResponse.result.content[0].text);
+        assert(payload.version === "1.1.0", `Expected 1.1.0, received ${payload.version}`);
+    });
+    passed += await runCheck("Phase 3 diff engine can scope conflicts to requested endpoints", async () => {
+        const { diff, detectConflicts } = await import("../src/schema/negotiation.js");
+        const previousSchema = {
+            base_url: "https://api.example.com",
+            auth: { type: "api_key", key_name: "X-API-Key" },
+            endpoints: [
+                { path: "/v1/search", method: "GET", summary: "", all_params: [] },
+                { path: "/v1/nearby", method: "GET", summary: "", all_params: [] },
+            ],
+        };
+        const nextSchema = {
+            base_url: "https://api.example.com",
+            auth: { type: "api_key", key_name: "X-API-Key" },
+            endpoints: [
+                {
+                    path: "/v1/search",
+                    method: "GET",
+                    summary: "",
+                    all_params: [{ name: "region", in: "query", required: true, schema: { type: "string" }, description: "" }],
+                },
+            ],
+        };
+        const schemaDiff = diff(previousSchema, nextSchema);
+        const conflicts = detectConflicts(schemaDiff, {
+            endpoints_needed: ["/v1/nearby"],
+            language: "typescript",
+        });
+        assert(conflicts.conflictCount === 1, `Expected 1 relevant conflict, received ${conflicts.conflictCount}`);
+        assert(conflicts.conflicts[0].path.includes("/v1/nearby"), `Expected nearby conflict, received ${conflicts.conflicts[0].path}`);
+    });
+    passed += await runCheck("Phase 3 diff engine includes both breaking changes when all endpoints are in scope", async () => {
+        const { diff, detectConflicts } = await import("../src/schema/negotiation.js");
+        const previousSchema = {
+            base_url: "https://api.example.com",
+            auth: { type: "api_key", key_name: "X-API-Key" },
+            endpoints: [
+                {
+                    path: "/v1/search",
+                    method: "GET",
+                    summary: "",
+                    all_params: [{ name: "query", in: "query", required: true, schema: { type: "string" }, description: "" }],
+                },
+                { path: "/v1/nearby", method: "GET", summary: "", all_params: [] },
+            ],
+        };
+        const nextSchema = {
+            base_url: "https://api.example.com",
+            auth: { type: "api_key", key_name: "X-API-Key" },
+            endpoints: [
+                {
+                    path: "/v1/search",
+                    method: "GET",
+                    summary: "",
+                    all_params: [
+                        { name: "query", in: "query", required: true, schema: { type: "string" }, description: "" },
+                        { name: "region", in: "query", required: true, schema: { type: "string" }, description: "" },
+                    ],
+                },
+            ],
+        };
+        const schemaDiff = diff(previousSchema, nextSchema);
+        const conflicts = detectConflicts(schemaDiff, {
+            endpoints_needed: [],
+            language: "typescript",
+        });
+        assert(schemaDiff.breakingCount === 2, `Expected 2 breaking changes, received ${schemaDiff.breakingCount}`);
+        assert(conflicts.conflictCount === 2, `Expected 2 conflicts, received ${conflicts.conflictCount}`);
+    });
+    passed += await runCheck("discover_schema returns the normalized contract shape", async () => {
+        const response = await callTool(server, 31, "discover_schema", {
+            org_token: consumerToken,
+            session_id: schemaSessionId2,
+        });
+        const payload = JSON.parse(response.result.content[0].text);
+        assert(Array.isArray(payload.contract.endpoints), "Expected normalized endpoints array");
+        assert(Array.isArray(payload.contract.endpoints[0].required_params), "Expected required_params array");
+        assert(Array.isArray(payload.contract.endpoints[0].optional_params), "Expected optional_params array");
+    });
+    await server.close();
+    if (passed !== 26) {
+        process.exit(1);
+    }
+}
+void main().catch((error) => {
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exit(1);
+});
+export {};
