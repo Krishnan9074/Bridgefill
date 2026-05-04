@@ -109,8 +109,10 @@ export interface GeneratedFile {
 export interface GeneratedOutput {
   files: GeneratedFile[];
   summary: string;
-  next_steps: string[];
+  nextSteps: string[];
   warnings: string[];
+  source: "llm" | "fallback";
+  model: string | null;
 }
 
 export interface SessionMessage {
@@ -217,4 +219,12 @@ export interface NegotiationResult {
     type: string;
     content: string;
   }>;
+}
+
+export interface ConsumerContext {
+  language?: string;
+  framework?: string;
+  use_case?: string;
+  existing_patterns?: string;
+  endpoints_needed?: string[];
 }

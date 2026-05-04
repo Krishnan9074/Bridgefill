@@ -19,6 +19,13 @@ export const config = {
         handshakeTimeoutMs: parseInt(process.env.HANDSHAKE_TIMEOUT_MS ?? "120000", 10),
         maxMessagesPerSession: 1000,
     },
+    llm: {
+        provider: process.env.LLM_PROVIDER ?? "openai",
+        model: process.env.LLM_MODEL ?? "gpt-4o",
+        baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
+        apiKey: process.env.LLM_API_KEY ?? null,
+        maxTokens: parseInt(process.env.LLM_MAX_TOKENS ?? "4096", 10),
+    },
     orgs: {
         org_demo_provider: {
             name: "Demo Provider",

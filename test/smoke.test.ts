@@ -2,7 +2,7 @@ import { issueOrgToken, verifyOrgToken } from "../src/auth/index.js";
 import { handleMcpRequest } from "../src/mcp/router.js";
 import { bumpVersion, detectConflicts, diff } from "../src/schema/negotiation.js";
 
-describe("TypeScript smoke tests", () => {
+describe("BridgeFill smoke tests", () => {
   test("tools/list exposes ten MCP tools", async () => {
     const response = await handleMcpRequest(
       {

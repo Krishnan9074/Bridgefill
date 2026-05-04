@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { config } from "../../config/index.js";
 import { assertToolAllowed, verifyOrgToken } from "../auth/index.js";
 import { auditCodegen, auditSchema, auditSession, auditTool } from "../auth/audit.js";
-import { diff, bumpVersion } from "../schema/negotiation.js";
+import { generateIntegrationCode } from "../codegen/orchestrator.js";
+import { diff, bumpVersion, negotiate } from "../schema/negotiation.js";
 import {
   appendMessage,
   attachGeneratedCode,
@@ -12,7 +13,7 @@ import {
   getSessionInternal,
   joinSession as storeJoinSession,
 } from "../session/store.js";
-import type { CodeSample, GeneratedOutput, NormalizedSchema, OrgClaims, RawSchemaContract, ServiceEntry, SessionRecord } from "../types.js";
+import type { CodeSample, ConsumerContext, GeneratedOutput, NormalizedSchema, OrgClaims, RawSchemaContract, ServiceEntry, SessionRecord } from "../types.js";
 import { getService, registerInRegistry } from "./service-registry.js";
 
 export class ValidationError extends Error {
@@ -256,13 +257,26 @@ export async function provideCodeSample(args: {
   session_id?: string | null;
   sample?: CodeSample | null;
 }): Promise<Record<string, unknown>> {
-  return withAuthedTool(args, "provide_code_sample", async () => ({
-    sample_id: `sample_${Date.now()}`,
-    session_id: args.session_id ?? null,
-    sample: args.sample ?? null,
-    stored: false,
-    message: "stub - code sample persistence coming in Phase 4",
-  }));
+  return withAuthedTool(args, "provide_code_sample", async (claims) => {
+    if (!args.session_id) {
+      throw new ValidationError("session_id is required");
+    }
+    if (!args.sample) {
+      throw new ValidationError("sample is required");
+    }
+
+    const session = getSession(args.session_id, claims.orgId);
+    assertSessionActive(session);
+    if (!session.schema) {
+      throw new ValidationError("No schema. Provider must call publish_schema first.");
+    }
+
+    session.schema.codeSamples.push(args.sample);
+    return {
+      message: "Code sample stored.",
+      total_samples: session.schema.codeSamples.length,
+    };
+  });
 }
 
 export async function discoverSchema(args: {
@@ -289,52 +303,113 @@ export async function discoverSchema(args: {
 export async function generateIntegration(args: {
   org_token?: string;
   session_id?: string;
-  consumer_context?: { language?: string | null; framework?: string | null };
+  consumer_context?: ConsumerContext;
 }): Promise<Record<string, unknown>> {
   return withAuthedTool(args, "generate_integration", async (claims) => {
-    auditCodegen.started(args.session_id ?? null, claims.orgId, args.consumer_context?.language ?? null, args.consumer_context?.framework ?? null);
-
-    const generated: GeneratedOutput = {
-      files: [
-        {
-          filename: "integration.js",
-          description: "Phase 1 placeholder integration file",
-          content: "// Stub integration output\nexport const status = 'stub';\n",
-          source: "fallback_generated",
-        },
-      ],
-      summary: "Stub integration output for Phase 1.",
-      next_steps: ["Implement real orchestration in Phase 4."],
-      warnings: ["This is placeholder data only."],
-    };
-
-    if (args.session_id) {
-      attachGeneratedCode(args.session_id, generated);
-      auditSession.completed(args.session_id);
+    if (!args.session_id) {
+      throw new ValidationError("session_id is required");
     }
-    auditCodegen.completed(args.session_id ?? null, generated.files.length, 0);
+    const session = getSession(args.session_id, claims.orgId);
+    assertSessionActive(session);
+    if (!session.schema) {
+      throw new ValidationError("No schema. Provider must call publish_schema first.");
+    }
+
+    const consumerContext = args.consumer_context ?? {};
+    const contract = session.schema.normalised;
+    const codeSamples = session.schema.codeSamples ?? [];
+    const negotiationResult = negotiate({
+      publishedSchema: contract,
+      previousSchema: null,
+      consumerContext,
+    });
+
+    auditCodegen.started(args.session_id, claims.orgId, consumerContext.language ?? null, consumerContext.framework ?? null);
+    const t0 = Date.now();
+    const generated = await generateIntegrationCode({
+      sessionId: args.session_id,
+      orgId: claims.orgId,
+      contract,
+      codeSamples,
+      consumerContext,
+      negotiation: negotiationResult,
+    });
+
+    attachGeneratedCode(args.session_id, generated);
+    auditSession.completed(args.session_id);
+    auditCodegen.completed(args.session_id, generated.files.length, Date.now() - t0);
 
     return {
       status: "generated",
-      source: "fallback",
-      model: null,
-      ...generated,
-      message: "stub - LLM orchestration coming in Phase 4",
+      language: consumerContext.language ?? "typescript",
+      source: generated.source,
+      model: generated.model ?? null,
+      files: generated.files,
+      summary: generated.summary,
+      next_steps: generated.nextSteps,
+      warnings: generated.warnings ?? [],
+      blocked_endpoints: negotiationResult.blockedEndpoints,
+      message: "Integration code generated. Call validate_integration to check for issues.",
     };
   });
 }
 
 export async function validateIntegration(args: {
   org_token?: string;
+  session_id?: string;
   files?: Array<{ filename: string; content: string }>;
 }): Promise<Record<string, unknown>> {
-  return withAuthedTool(args, "validate_integration", async () => ({
-    passed: true,
-    issue_count: 0,
-    issues: [],
-    checked_files: Array.isArray(args.files) ? args.files.length : 0,
-    message: "stub - validation engine coming in Phase 4",
-  }));
+  return withAuthedTool(args, "validate_integration", async (claims) => {
+    if (!args.session_id) {
+      throw new ValidationError("session_id is required");
+    }
+    const session = getSession(args.session_id, claims.orgId);
+    if (!session.schema) {
+      throw new ValidationError("No schema. Provider must call publish_schema first.");
+    }
+
+    const files = Array.isArray(args.files) && args.files.length > 0
+      ? args.files
+      : session.generatedCode?.files.map((file) => ({ filename: file.filename, content: file.content })) ?? [];
+
+    const codeBlob = files.map((file) => file.content).join("\n");
+    const issues: Array<{ severity: string; endpoint: string | null; message: string }> = [];
+    const contract = session.schema.normalised;
+
+    if (!codeBlob.includes(contract.base_url)) {
+      issues.push({
+        severity: "error",
+        endpoint: null,
+        message: `Generated code does not reference base URL ${contract.base_url}.`,
+      });
+    }
+
+    if (contract.auth.key_name && !codeBlob.includes(contract.auth.key_name)) {
+      issues.push({
+        severity: "error",
+        endpoint: null,
+        message: `Generated code does not reference auth key ${contract.auth.key_name}.`,
+      });
+    }
+
+    for (const endpoint of contract.endpoints) {
+      for (const param of endpoint.required_params) {
+        if (!codeBlob.includes(param.name)) {
+          issues.push({
+            severity: "error",
+            endpoint: endpoint.path,
+            message: `Missing required param ${param.name} for ${endpoint.path}.`,
+          });
+        }
+      }
+    }
+
+    return {
+      passed: issues.length === 0,
+      issue_count: issues.length,
+      issues,
+    };
+  });
 }
 
 export async function emitMessage(args: {
@@ -358,8 +433,7 @@ export async function emitMessage(args: {
     return {
       message_id: sessionMessage.id,
       session_message_count: session.messages.length,
-      message: "stub - negotiation messaging coming in Phase 4",
-      emitted: sessionMessage,
+      message: "Message emitted.",
     };
   });
 }

@@ -143,6 +143,8 @@ async function main() {
     let oldRotatedRawKey = "";
     let schemaSessionId = "";
     let schemaSessionId2 = "";
+    let phase4SessionId = "";
+    let llmSessionId = "";
     passed += await runCheck("POST /auth/token with valid provider API key returns signed JWT", async () => {
         const response = await server.inject({
             method: "POST",
@@ -540,8 +542,181 @@ async function main() {
         assert(Array.isArray(payload.contract.endpoints[0].required_params), "Expected required_params array");
         assert(Array.isArray(payload.contract.endpoints[0].optional_params), "Expected optional_params array");
     });
+    passed += await runCheck("provide_code_sample stores provider code for later generation", async () => {
+        const registerResponse = await callTool(server, 32, "register_service", {
+            org_token: providerToken,
+            service_name: "Payments API",
+            service_description: "Phase 4 fallback scenario",
+        });
+        const phase4ServiceId = JSON.parse(registerResponse.result.content[0].text).service_id;
+        const providerJoin = await callTool(server, 33, "join_session", {
+            org_token: providerToken,
+            service_id: phase4ServiceId,
+        });
+        phase4SessionId = JSON.parse(providerJoin.result.content[0].text).session_id;
+        await callTool(server, 34, "join_session", {
+            org_token: consumerToken,
+            service_id: phase4ServiceId,
+        });
+        await callTool(server, 35, "publish_schema", {
+            org_token: providerToken,
+            session_id: phase4SessionId,
+            schema: {
+                base_url: "https://payments.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-PAYMENTS-KEY" },
+                endpoints: [
+                    {
+                        path: "/v1/payment_intents",
+                        method: "POST",
+                        summary: "Create payment intent",
+                        parameters: [
+                            { name: "amount", in: "body", required: true, schema: { type: "number" } },
+                            { name: "currency", in: "body", required: true, schema: { type: "string" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+            },
+        });
+        const sampleResponse = await callTool(server, 36, "provide_code_sample", {
+            org_token: providerToken,
+            session_id: phase4SessionId,
+            sample: {
+                language: "typescript",
+                description: "Authoritative payment intent example",
+                content: [
+                    "export async function createPaymentIntent() {",
+                    '  const endpoint = "/v1/payment_intents";',
+                    '  const required = ["amount", "currency"];',
+                    '  const authHeader = "X-PAYMENTS-KEY";',
+                    '  const baseUrl = "https://payments.example.com";',
+                    "  return { endpoint, required, authHeader, baseUrl };",
+                    "}",
+                ].join("\n"),
+            },
+        });
+        const payload = JSON.parse(sampleResponse.result.content[0].text);
+        assert(payload.total_samples === 1, `Expected 1 code sample, received ${payload.total_samples}`);
+    });
+    passed += await runCheck("generate_integration without an API key returns fallback/provider_sample files", async () => {
+        const { config } = await import("../config/index.js");
+        config.llm.apiKey = null;
+        const response = await callTool(server, 37, "generate_integration", {
+            org_token: consumerToken,
+            session_id: phase4SessionId,
+            consumer_context: {
+                language: "typescript",
+                framework: "nextjs",
+                use_case: "Create a payment intent on checkout",
+            },
+        });
+        const payload = JSON.parse(response.result.content[0].text);
+        assert(payload.source === "fallback", `Expected fallback source, received ${payload.source}`);
+        assert(payload.files.some((file) => file.source === "provider_sample"), "Expected a provider_sample file");
+        assert(payload.files.some((file) => file.source === "fallback_generated"), "Expected a fallback_generated file");
+        assert(payload.files.some((file) => file.content.includes("X-PAYMENTS-KEY")), "Expected provider sample content to appear in output");
+    });
+    passed += await runCheck("validate_integration passes for generated fallback/provider output and fails for missing required params", async () => {
+        const generatedResponse = await callTool(server, 38, "get_session_status", {
+            org_token: consumerToken,
+            session_id: phase4SessionId,
+        });
+        const sessionPayload = JSON.parse(generatedResponse.result.content[0].text);
+        const validResponse = await callTool(server, 39, "validate_integration", {
+            org_token: consumerToken,
+            session_id: phase4SessionId,
+            files: sessionPayload.generated_code.files,
+        });
+        const validPayload = JSON.parse(validResponse.result.content[0].text);
+        assert(validPayload.passed === true, "Expected generated integration to validate successfully");
+        const invalidResponse = await callTool(server, 40, "validate_integration", {
+            org_token: consumerToken,
+            session_id: phase4SessionId,
+            files: [
+                {
+                    filename: "broken.ts",
+                    content: "export const nothingUsefulHere = true;",
+                },
+            ],
+        });
+        const invalidPayload = JSON.parse(invalidResponse.result.content[0].text);
+        assert(invalidPayload.passed === false, "Expected broken integration to fail validation");
+        assert(invalidPayload.issue_count > 0, "Expected one or more validation issues");
+    });
+    passed += await runCheck("emit_message stores messages visible in get_session_status", async () => {
+        const messageResponse = await callTool(server, 41, "emit_message", {
+            org_token: consumerToken,
+            session_id: schemaSessionId2,
+            message: {
+                text: "Can you confirm the nearby endpoint rate limit?",
+                kind: "question",
+            },
+        });
+        const messagePayload = JSON.parse(messageResponse.result.content[0].text);
+        assert(messagePayload.session_message_count > 0, "Expected session message count to increase");
+        const statusResponse = await callTool(server, 42, "get_session_status", {
+            org_token: consumerToken,
+            session_id: schemaSessionId2,
+        });
+        const statusPayload = JSON.parse(statusResponse.result.content[0].text);
+        assert(statusPayload.messages.some((message) => message.text.includes("nearby endpoint rate limit")), "Expected emitted message in session status");
+    });
+    passed += await runCheck("generate_integration with an LLM API key uses the real configured LLM when available", async () => {
+        const { config } = await import("../config/index.js");
+        if (!config.llm.apiKey) {
+            return;
+        }
+        const registerResponse = await callTool(server, 43, "register_service", {
+            org_token: providerToken,
+            service_name: "LLM Service",
+            service_description: "Phase 4 llm path",
+        });
+        const llmServiceId = JSON.parse(registerResponse.result.content[0].text).service_id;
+        const providerJoin = await callTool(server, 44, "join_session", {
+            org_token: providerToken,
+            service_id: llmServiceId,
+        });
+        llmSessionId = JSON.parse(providerJoin.result.content[0].text).session_id;
+        await callTool(server, 45, "join_session", {
+            org_token: consumerToken,
+            service_id: llmServiceId,
+        });
+        await callTool(server, 46, "publish_schema", {
+            org_token: providerToken,
+            session_id: llmSessionId,
+            schema: {
+                base_url: "https://llm.example.com",
+                auth: { type: "api_key", location: "header", key_name: "X-LLM-Key" },
+                endpoints: [
+                    {
+                        path: "/v1/tasks",
+                        method: "GET",
+                        summary: "List tasks",
+                        parameters: [
+                            { name: "workspace_id", in: "query", required: true, schema: { type: "string" } },
+                        ],
+                        response_schema: { type: "object" },
+                    },
+                ],
+            },
+        });
+        const generateResponse = await callTool(server, 47, "generate_integration", {
+            org_token: consumerToken,
+            session_id: llmSessionId,
+            consumer_context: {
+                language: "typescript",
+                framework: "nextjs",
+                use_case: "List tasks for a workspace",
+            },
+        });
+        const payload = JSON.parse(generateResponse.result.content[0].text);
+        assert(payload.source === "llm", `Expected llm source, received ${payload.source}`);
+        assert(payload.model === config.llm.model, `Expected configured model ${config.llm.model}, received ${payload.model}`);
+        assert(payload.files.every((file) => file.source === "llm_generated"), "Expected llm_generated files");
+        assert(payload.files.every((file) => file.content.length > 0), "Expected non-empty LLM-generated file content");
+    });
     await server.close();
-    if (passed !== 26) {
+    if (passed !== 32) {
         process.exit(1);
     }
 }
