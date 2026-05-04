@@ -23,7 +23,7 @@ export const config = {
         provider: process.env.LLM_PROVIDER ?? "openai",
         model: process.env.LLM_MODEL ?? "gpt-4o",
         baseUrl: process.env.LLM_BASE_URL ?? "https://api.openai.com/v1",
-        apiKey: process.env.LLM_API_KEY ?? null,
+        apiKey: process.env.LLM_API_KEY ?? process.env.OPENAI_API_KEY ?? null,
         maxTokens: parseInt(process.env.LLM_MAX_TOKENS ?? "4096", 10),
     },
     orgs: {
