@@ -1018,8 +1018,40 @@ async function main() {
         assert(firstFile.length > 0, "Expected generated file content");
         assert(stdout.includes("BridgeFill - Generated") || stdout.includes("BridgeFill — Generated"), "Expected CLI summary output");
     });
+    passed += await runCheck("GET /ready returns 200 with ready:true for memory backend", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/ready",
+        });
+        const body = response.json();
+        if ((process.env.STORE_BACKEND ?? "memory") === "memory") {
+            assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+            assert(body.ready === true, `Expected ready=true, received ${body.ready}`);
+            assert(body.backend === "memory", `Expected backend=memory, received ${body.backend}`);
+        }
+        else {
+            assert(response.statusCode === 200 || response.statusCode === 503, `Expected 200 or 503, received ${response.statusCode}`);
+            assert(typeof body.ready === "boolean", "Expected ready to be boolean");
+        }
+    });
+    passed += await runCheck("Security headers are set (x-frame-options and x-content-type-options)", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/health",
+        });
+        const headers = response.headers;
+        assert(typeof headers["x-frame-options"] === "string" || typeof headers["x-content-type-options"] === "string", `Expected security headers, received: x-frame-options=${headers["x-frame-options"]}, x-content-type-options=${headers["x-content-type-options"]}`);
+    });
+    passed += await runCheck("Rate-limit headers are present on rate-limited routes", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/health",
+        });
+        const headers = response.headers;
+        assert(typeof headers["x-ratelimit-limit"] === "string" || typeof headers["ratelimit-limit"] === "string", `Expected rate-limit headers, received keys: ${Object.keys(headers).join(", ")}`);
+    });
     await server.close();
-    if (passed !== 45) {
+    if (passed !== 48) {
         process.exit(1);
     }
 }

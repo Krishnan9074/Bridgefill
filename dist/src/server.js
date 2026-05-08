@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import { config } from "../config/index.js";
 import { issueOrgToken, verifyOrgToken } from "./auth/index.js";
@@ -60,6 +62,23 @@ function normaliseSchema(raw) {
         normalised_at: new Date().toISOString(),
     };
 }
+function validateStartupConfig() {
+    if (config.app.env !== "production")
+        return;
+    const warnings = [];
+    if (config.jwt.secret === "dev-secret-change-in-production") {
+        warnings.push("JWT_SECRET is using the default dev value — set a strong secret in production");
+    }
+    if (!config.llm.apiKey) {
+        warnings.push("LLM_API_KEY is not set — code generation will use fallback stubs");
+    }
+    if (process.env.STORE_BACKEND === "postgres" && !process.env.DATABASE_URL) {
+        throw new Error("STORE_BACKEND=postgres requires DATABASE_URL to be set");
+    }
+    for (const warning of warnings) {
+        process.stderr.write(`[bridgefill] WARN: ${warning}\n`);
+    }
+}
 function buildLoggerOptions() {
     if (config.app.env === "test") {
         return false;
@@ -100,6 +119,7 @@ function toErrorResponse(error) {
     };
 }
 export async function buildServer() {
+    validateStartupConfig();
     const stores = await initStores();
     await ensureSeededKeys();
     const fastify = Fastify({
@@ -107,6 +127,26 @@ export async function buildServer() {
     });
     await fastify.register(cors, { origin: true });
     await fastify.register(websocket);
+    await fastify.register(helmet, {
+        contentSecurityPolicy: {
+            directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+                styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+                fontSrc: ["'self'", "https://fonts.gstatic.com"],
+                connectSrc: ["'self'"],
+                imgSrc: ["'self'", "data:"],
+            },
+        },
+        crossOriginEmbedderPolicy: false,
+    });
+    await fastify.register(rateLimit, {
+        global: true,
+        max: 200,
+        timeWindow: "1 minute",
+        skipOnError: true,
+        keyGenerator: (request) => request.ip,
+    });
     fastify.setErrorHandler((error, request, reply) => {
         const response = toErrorResponse(error);
         reply.code(response.statusCode);
@@ -128,6 +168,14 @@ export async function buildServer() {
             time: new Date().toISOString(),
         };
     });
+    fastify.get("/ready", async (_request, reply) => {
+        const storeStatus = await getStoreStatus();
+        if (storeStatus.backend === "postgres" && !storeStatus.dbConnected) {
+            reply.code(503);
+            return { ready: false, reason: "database not connected" };
+        }
+        return { ready: true, backend: storeStatus.backend };
+    });
     fastify.get("/", async (_request, reply) => {
         reply.type("text/html; charset=utf-8");
         return readDashboardHtml();
@@ -146,7 +194,9 @@ export async function buildServer() {
         api_key_set: !!config.llm.apiKey,
         max_tokens: config.llm.maxTokens,
     }));
-    fastify.post("/auth/token", async (request) => {
+    fastify.post("/auth/token", {
+        config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+    }, async (request) => {
         const { org_id: orgId, api_key: apiKey, role, service_id: serviceId } = request.body ?? {};
         const token = issueOrgToken(orgId, apiKey, role, serviceId);
         return {
@@ -190,7 +240,9 @@ export async function buildServer() {
             key_id: record.keyId,
         };
     });
-    fastify.get("/audit", async (request) => ({
+    fastify.get("/audit", {
+        config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    }, async (request) => ({
         entries: queryAuditLog({
             orgId: request.query.org_id,
             category: request.query.category,
@@ -207,7 +259,9 @@ export async function buildServer() {
         reply.raw.write(": connected\n\n");
         request.raw.on("close", cleanup);
     });
-    fastify.post("/registry/schemas", async (request) => {
+    fastify.post("/registry/schemas", {
+        config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    }, async (request) => {
         const claims = requireBearerClaims(request);
         const service = getService(request.body.service_id);
         if (!service) {
@@ -262,7 +316,9 @@ export async function buildServer() {
         }
         return schemaDiff;
     });
-    fastify.post("/generate", async (request, reply) => {
+    fastify.post("/generate", {
+        config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    }, async (request, reply) => {
         const auth = resolveStandaloneAuth({
             bearerToken: getBearerToken(request),
             rawApiKey: request.query.api_key ?? null,
@@ -388,6 +444,13 @@ export async function startServer() {
         host: config.server.host,
         port: config.server.port,
     });
+    const shutdown = async (signal) => {
+        fastify.log.info(`Received ${signal}, shutting down gracefully…`);
+        await fastify.close();
+        process.exit(0);
+    };
+    process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+    process.once("SIGINT", () => { void shutdown("SIGINT"); });
     return fastify;
 }
 const entrypointPath = process.argv[1] ? new URL(`file://${process.argv[1]}`).href : null;
