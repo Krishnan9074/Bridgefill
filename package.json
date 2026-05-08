@@ -6,10 +6,13 @@
   "main": "dist/src/server.js",
   "scripts": {
     "start": "tsx src/server.ts",
+    "start:prod": "npm run build && node dist/src/server.js",
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "generate:cli": "tsx cli/generate.ts",
-    "test:e2e": "tsx test/e2e.ts",
+    "test:e2e": "npm run build && node dist/test/e2e.js",
+    "test:e2e:memory": "STORE_BACKEND=memory npm run test:e2e",
+    "test:e2e:postgres": "STORE_BACKEND=postgres npm run test:e2e",
     "test": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.cjs"
   },
   "dependencies": {

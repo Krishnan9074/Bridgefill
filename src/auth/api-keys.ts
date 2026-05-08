@@ -30,10 +30,6 @@ function copyPublicRecord(record: ApiKeyRecord): PublicApiKeyRecord {
   return { ...publicRecord };
 }
 
-function saveRecord(record: ApiKeyRecord): void {
-  void getStores().keys.save(record);
-}
-
 function buildRecord(orgId: string, { rawKey, label = null, ttlDays = null, status = "active" }: {
   rawKey: string;
   label?: string | null;
@@ -139,6 +135,7 @@ export async function rotateKey(keyId: string, { gracePeriodMs = 60_000 }: { gra
     oldRecord.status = "revoked";
     oldRecord.updatedAt = new Date().toISOString();
     oldRecord._revokeTimer = null;
+    void getStores().keys.save(oldRecord);
   }, gracePeriodMs);
   if (typeof oldRecord._revokeTimer.unref === "function") {
     oldRecord._revokeTimer.unref();

@@ -18,8 +18,27 @@ function withoutTimer<T extends { _revokeTimer?: unknown; _expiryTimer?: unknown
   return clone;
 }
 
+async function readMigrationSql(): Promise<string> {
+  const candidates = [
+    join(currentDir, "..", "migrations", "001_initial.sql"),
+    join(process.cwd(), "src", "persistence", "migrations", "001_initial.sql"),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Migration file 001_initial.sql not found");
+}
+
 async function runMigrations(pool: pg.Pool): Promise<void> {
-  const sql = await readFile(join(currentDir, "..", "migrations", "001_initial.sql"), "utf8");
+  const sql = await readMigrationSql();
   await pool.query(sql);
 }
 

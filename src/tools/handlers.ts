@@ -296,6 +296,7 @@ export async function provideCodeSample(args: {
     }
 
     session.schema.codeSamples.push(args.sample);
+    await getStores().sessions.set(session.id, session);
     return {
       message: "Code sample stored.",
       total_samples: session.schema.codeSamples.length,
