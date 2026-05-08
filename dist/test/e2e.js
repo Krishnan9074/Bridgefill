@@ -79,6 +79,25 @@ async function main() {
             assert(typeof body.db_latency_ms === "number" && body.db_latency_ms >= 0, `Expected numeric db latency, received ${body.db_latency_ms}`);
         }
     });
+    passed += await runCheck("GET / serves the dashboard HTML shell", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/",
+        });
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(response.headers["content-type"]?.includes("text/html"), `Expected html content-type, received ${response.headers["content-type"]}`);
+        assert(response.body.includes("BridgeFill Dashboard"), "Expected dashboard title in HTML");
+    });
+    passed += await runCheck("GET /orgs returns configured organizations", async () => {
+        const response = await server.inject({
+            method: "GET",
+            url: "/orgs",
+        });
+        const body = response.json();
+        assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+        assert(Array.isArray(body.orgs) && body.orgs.length > 0, "Expected org list");
+        assert(body.orgs.some((org) => org.org_id === "org_demo_provider"), "Expected org_demo_provider in org list");
+    });
     passed += await runCheck("GET /llm/status returns current LLM config", async () => {
         const response = await server.inject({
             method: "GET",
@@ -1000,7 +1019,7 @@ async function main() {
         assert(stdout.includes("BridgeFill - Generated") || stdout.includes("BridgeFill — Generated"), "Expected CLI summary output");
     });
     await server.close();
-    if (passed !== 43) {
+    if (passed !== 45) {
         process.exit(1);
     }
 }

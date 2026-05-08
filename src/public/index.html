@@ -1,0 +1,1507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BridgeFill Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    :root {
+      --bg: #091318;
+      --panel: rgba(11, 27, 35, 0.92);
+      --panel-2: rgba(15, 37, 48, 0.95);
+      --muted: #8ca0a9;
+      --text: #e9f6f3;
+      --line: rgba(121, 170, 171, 0.18);
+      --accent: #74f0c3;
+      --accent-2: #19b895;
+      --warning: #f6c565;
+      --danger: #ff7373;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+      --sidebar-w: 72px;
+      --sidebar-w-hover: 224px;
+      --radius: 20px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background:
+      radial-gradient(circle at top left, rgba(116, 240, 195, 0.10), transparent 30%),
+      radial-gradient(circle at bottom right, rgba(25, 184, 149, 0.14), transparent 24%),
+      linear-gradient(180deg, #081116 0%, #091318 100%);
+      color: var(--text);
+      font-family: "IBM Plex Sans", sans-serif;
+    }
+
+    body {
+      display: flex;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button, input, select, textarea {
+      font: inherit;
+      color: inherit;
+    }
+
+    .sidebar {
+      width: var(--sidebar-w);
+      transition: width 180ms ease;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(8, 20, 26, 0.98), rgba(7, 15, 20, 0.96));
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      overflow: hidden;
+      position: relative;
+      z-index: 2;
+    }
+
+    .sidebar:hover { width: var(--sidebar-w-hover); }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-height: 42px;
+    }
+
+    .mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-family: "IBM Plex Sans Condensed", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      background: linear-gradient(135deg, rgba(116, 240, 195, 0.22), rgba(25, 184, 149, 0.40));
+      box-shadow: inset 0 0 0 1px rgba(116, 240, 195, 0.18);
+    }
+
+    .logo-copy, .nav-label, .status-copy, .settings-form label span, .section-title small {
+      opacity: 0;
+      transition: opacity 140ms ease;
+      white-space: nowrap;
+    }
+
+    .sidebar:hover .logo-copy,
+    .sidebar:hover .nav-label,
+    .sidebar:hover .status-copy,
+    .sidebar:hover .settings-form label span,
+    .sidebar:hover .section-title small { opacity: 1; }
+
+    .logo-copy strong {
+      display: block;
+      font-family: "IBM Plex Sans Condensed", sans-serif;
+      letter-spacing: 0.08em;
+      font-size: 1rem;
+    }
+
+    .logo-copy small,
+    .status-copy,
+    .meta,
+    .muted { color: var(--muted); }
+
+    nav {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav-link {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 12px;
+      border-left: 3px solid transparent;
+      border-radius: 14px;
+      color: #c3d5d8;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.88rem;
+      transition: background 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease;
+    }
+
+    .nav-link:hover,
+    .nav-link.active {
+      background: rgba(116, 240, 195, 0.08);
+      border-left-color: var(--accent);
+      color: var(--text);
+      transform: translateX(1px);
+    }
+
+    .main {
+      flex: 1;
+      overflow: auto;
+      padding: 22px;
+    }
+
+    .page {
+      opacity: 0;
+      animation: fadein 180ms ease forwards;
+    }
+
+    @keyframes fadein {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-family: "IBM Plex Sans Condensed", sans-serif;
+      font-size: clamp(1.8rem, 3vw, 2.5rem);
+      letter-spacing: 0.02em;
+    }
+
+    .pill {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 8px 12px;
+      background: rgba(12, 29, 37, 0.72);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.82rem;
+    }
+
+    .grid, .stats, .two-col, .three-col {
+      display: grid;
+      gap: 16px;
+    }
+
+    .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .two-col { grid-template-columns: 1.1fr 0.9fr; }
+    .three-col { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    .card { padding: 18px; }
+    .panel { padding: 18px 18px 16px; }
+
+    .stat-card strong {
+      display: block;
+      font-size: 2rem;
+      font-family: "IBM Plex Sans Condensed", sans-serif;
+      line-height: 1;
+      margin-top: 10px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .section-title h2, .section-title h3 {
+      margin: 0;
+      font-size: 1rem;
+      font-family: "IBM Plex Sans Condensed", sans-serif;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .actions, .inline-actions, .filter-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .btn, .ghost, .danger {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(17, 37, 47, 0.85);
+      color: var(--text);
+      min-height: 40px;
+      padding: 0 14px;
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+    }
+
+    .btn:hover, .ghost:hover, .danger:hover { transform: translateY(-1px); border-color: rgba(116, 240, 195, 0.38); }
+    .btn { background: linear-gradient(135deg, rgba(116, 240, 195, 0.16), rgba(25, 184, 149, 0.25)); }
+    .danger { color: #ffd5d5; border-color: rgba(255, 115, 115, 0.3); }
+
+    input, select, textarea {
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(7, 16, 20, 0.82);
+      padding: 12px 14px;
+      color: var(--text);
+      outline: none;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      border-color: rgba(116, 240, 195, 0.55);
+      box-shadow: 0 0 0 1px rgba(116, 240, 195, 0.18);
+    }
+
+    textarea { min-height: 140px; resize: vertical; }
+    label { display: grid; gap: 8px; font-size: 0.92rem; }
+    label span { color: #d1e4e1; }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th, td {
+      padding: 14px 16px;
+      text-align: left;
+      border-bottom: 1px solid rgba(121, 170, 171, 0.12);
+      vertical-align: top;
+      font-size: 0.92rem;
+    }
+
+    th {
+      font-family: "IBM Plex Mono", monospace;
+      color: var(--muted);
+      font-weight: 500;
+      background: rgba(10, 20, 25, 0.95);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tr.data-row {
+      animation: rowfade 220ms ease both;
+    }
+
+    @keyframes rowfade {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.76rem;
+      font-family: "IBM Plex Mono", monospace;
+      border: 1px solid var(--line);
+      background: rgba(12, 24, 31, 0.8);
+    }
+
+    .badge.success { color: var(--accent); }
+    .badge.warning { color: var(--warning); }
+    .badge.danger { color: var(--danger); }
+
+    .feed, .timeline, .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .feed-item, .timeline-item, .code-shell, .session-shell, .toast {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(10, 22, 28, 0.82);
+      padding: 14px;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      bottom: 18px;
+      width: min(520px, calc(100vw - 36px));
+      background: rgba(8, 19, 25, 0.98);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+      overflow: auto;
+      transform: translateX(110%);
+      transition: transform 200ms ease;
+      z-index: 20;
+    }
+
+    .drawer.open { transform: translateX(0); }
+    .drawer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+      z-index: 18;
+    }
+
+    .overlay.show { opacity: 1; pointer-events: auto; }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(14, 31, 39, 0.78);
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+
+    .tab.active { border-color: rgba(116, 240, 195, 0.55); background: rgba(116, 240, 195, 0.08); }
+    pre {
+      margin: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+
+    .code-shell code .kw { color: #7fd4ff; }
+    .code-shell code .str { color: #f6c565; }
+    .code-shell code .com { color: #7ea2a0; }
+
+    .toast-wrap {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      display: grid;
+      gap: 10px;
+      z-index: 24;
+    }
+
+    .toast {
+      min-width: 280px;
+      animation: toastin 180ms ease both;
+    }
+
+    @keyframes toastin {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .session-grid {
+      display: grid;
+      grid-template-columns: 0.95fr 1.1fr 0.95fr;
+      gap: 14px;
+    }
+
+    .session-shell h4 { margin: 0 0 10px; font-family: "IBM Plex Mono", monospace; font-size: 0.9rem; }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--muted);
+      box-shadow: 0 0 0 6px rgba(140, 160, 169, 0.08);
+    }
+
+    .status-dot.live { background: var(--accent); box-shadow: 0 0 0 6px rgba(116, 240, 195, 0.10); }
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      background: rgba(11, 25, 31, 0.78);
+    }
+    .chip.active { border-color: rgba(116, 240, 195, 0.5); color: var(--accent); }
+
+    .empty {
+      padding: 24px;
+      border: 1px dashed var(--line);
+      border-radius: 18px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .scroll-area {
+      max-height: 520px;
+      overflow: auto;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .toggle input { width: auto; }
+
+    @media (max-width: 1180px) {
+      .stats, .two-col, .three-col, .session-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 800px) {
+      body { display: block; }
+      .sidebar {
+        width: 100%;
+        padding-bottom: 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .sidebar:hover { width: 100%; }
+      .logo-copy, .nav-label, .status-copy, .settings-form label span { opacity: 1; }
+      nav { display: grid; grid-template-columns: repeat(3, 1fr); }
+      .main { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="mark">BF</div>
+      <div class="logo-copy">
+        <strong>BridgeFill</strong>
+        <small>v0.1.0</small>
+      </div>
+    </div>
+
+    <nav id="nav"></nav>
+
+    <div style="margin-top:auto" class="card">
+      <div class="actions" style="justify-content:flex-start; flex-wrap:nowrap;">
+        <span id="llm-dot" class="status-dot"></span>
+        <div class="status-copy">
+          <strong style="display:block; font-family:'IBM Plex Mono', monospace; font-size:0.82rem;">LLM Status</strong>
+          <small id="llm-model">Checking…</small>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="app"></div>
+  </main>
+
+  <div id="overlay" class="overlay"></div>
+  <div id="drawer" class="drawer"></div>
+  <div id="toasts" class="toast-wrap"></div>
+
+  <script>
+    const state = {
+      health: null,
+      llm: null,
+      registry: [],
+      registryHistory: {},
+      generated: null,
+      validation: null,
+      audit: [],
+      orgs: [],
+      sessions: [],
+      selectedSessionId: null,
+      sessionStatus: null,
+      selectedServiceId: null,
+      selectedVersion: "latest",
+      selectedGenerateFile: 0,
+      auth: loadAuth(),
+      autoRefreshAudit: false,
+      auditVisibleCount: 50,
+      registryQuery: "",
+      registryTag: "",
+      drawerOpen: false
+    };
+
+    const routes = [
+      { hash: "#/", label: "◆ Dashboard" },
+      { hash: "#/registry", label: "◆ Registry" },
+      { hash: "#/generate", label: "◆ Generate" },
+      { hash: "#/sessions", label: "◆ Sessions" },
+      { hash: "#/audit", label: "◆ Audit" },
+      { hash: "#/settings", label: "◆ Settings" }
+    ];
+
+    let auditRefreshTimer = null;
+
+    function loadAuth() {
+      try {
+        return JSON.parse(localStorage.getItem("bridgefill_auth") || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function saveAuth(next) {
+      state.auth = { ...state.auth, ...next };
+      localStorage.setItem("bridgefill_auth", JSON.stringify(state.auth));
+    }
+
+    function showToast(kind, title, body) {
+      const wrap = document.getElementById("toasts");
+      const el = document.createElement("div");
+      el.className = "toast";
+      el.innerHTML = `
+        <div class="inline-actions" style="justify-content:space-between; align-items:flex-start;">
+          <div>
+            <strong>${escapeHtml(title)}</strong>
+            <div class="muted" style="margin-top:6px;">${escapeHtml(body)}</div>
+          </div>
+          <span class="badge ${kind === "error" ? "danger" : kind === "success" ? "success" : "warning"}">${escapeHtml(kind.toUpperCase())}</span>
+        </div>`;
+      wrap.appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function currentHash() {
+      return location.hash || "#/";
+    }
+
+    function navMarkup() {
+      return routes.map((route) => `
+        <a class="nav-link ${currentHash() === route.hash ? "active" : ""}" href="${route.hash}">
+          <span style="min-width:16px;">◆</span>
+          <span class="nav-label">${route.label.replace("◆ ", "")}</span>
+        </a>`).join("");
+    }
+
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.message || `Request failed: ${response.status}`);
+      }
+      return payload;
+    }
+
+    async function getToken(role) {
+      if (!state.auth.org_id || !state.auth.api_key) {
+        throw new Error("Set org_id and api_key in Settings first.");
+      }
+      const payload = await fetchJson("/auth/token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          org_id: state.auth.org_id,
+          api_key: state.auth.api_key,
+          role
+        })
+      });
+      return payload.token;
+    }
+
+    function badgeForSource(source) {
+      if (source === "provider_sample") return '<span class="badge success">AUTHORITATIVE</span>';
+      if (source === "llm_generated") return '<span class="badge warning">AI</span>';
+      return '<span class="badge">STUB</span>';
+    }
+
+    function highlightCode(input) {
+      const escaped = escapeHtml(input);
+      return escaped
+        .replace(/(\/\/.*$)/gm, '<span class="com">$1</span>')
+        .replace(/(".*?"|'.*?')/g, '<span class="str">$1</span>')
+        .replace(/\b(const|let|function|return|export|async|await|if|for|throw|import|from|def|class)\b/g, '<span class="kw">$1</span>');
+    }
+
+    async function refreshBootData() {
+      const [health, llm, registry, orgs] = await Promise.all([
+        fetchJson("/health"),
+        fetchJson("/llm/status"),
+        fetchJson("/registry/schemas"),
+        fetchJson("/orgs")
+      ]);
+      state.health = health;
+      state.llm = llm;
+      state.registry = registry.schemas || [];
+      state.orgs = orgs.orgs || [];
+      document.getElementById("llm-dot").className = `status-dot ${llm.api_key_set ? "live" : ""}`;
+      document.getElementById("llm-model").textContent = `${llm.model} · ${llm.api_key_set ? "ready" : "no key"}`;
+    }
+
+    async function refreshAudit() {
+      const payload = await fetchJson("/audit?limit=200");
+      state.audit = payload.entries || [];
+      state.sessions = state.audit.filter((entry) => entry.category === "session");
+    }
+
+    async function ensureRegistryHistory(serviceId) {
+      if (!serviceId || state.registryHistory[serviceId]) return;
+      const payload = await fetchJson(`/registry/services/${serviceId}/schemas`);
+      state.registryHistory[serviceId] = payload.history || [];
+    }
+
+    function renderPage(title, subtitle, body) {
+      return `
+        <div class="page">
+          <div class="topbar">
+            <div>
+              <h1>${escapeHtml(title)}</h1>
+              <div class="muted" style="margin-top:8px;">${escapeHtml(subtitle)}</div>
+            </div>
+            <div class="pill">${escapeHtml(state.health?.store_backend || "memory")} backend</div>
+          </div>
+          ${body}
+        </div>`;
+    }
+
+    function renderDashboard() {
+      const activity = state.audit.slice(0, 20);
+      const activeSessions = state.sessions.filter((entry) => entry.event === "activated").length;
+      const generationsToday = state.audit.filter((entry) => entry.category === "codegen").length;
+      return renderPage("Developer Dashboard", "Operational overview across registry, generation, sessions, and audit activity.", `
+        <div class="stats">
+          <div class="card stat-card"><div class="meta">Total Services</div><strong>${state.registry.length}</strong></div>
+          <div class="card stat-card"><div class="meta">Total Schemas</div><strong>${state.registry.length}</strong></div>
+          <div class="card stat-card"><div class="meta">Generations Today</div><strong>${generationsToday}</strong></div>
+          <div class="card stat-card"><div class="meta">Active Sessions</div><strong>${activeSessions}</strong></div>
+        </div>
+        <div class="two-col" style="margin-top:18px;">
+          <section class="panel">
+            <div class="section-title">
+              <h2>Recent Activity</h2>
+              <small>Last 20 audit events</small>
+            </div>
+            <div class="feed">
+              ${activity.length ? activity.map((entry, index) => `
+                <div class="feed-item data-row" style="animation-delay:${index * 30}ms;">
+                  <div class="inline-actions" style="justify-content:space-between;">
+                    <strong>${escapeHtml(entry.category)} · ${escapeHtml(entry.event)}</strong>
+                    <span class="meta">${new Date(entry.ts).toLocaleString()}</span>
+                  </div>
+                  <div class="muted" style="margin-top:8px;">${escapeHtml(JSON.stringify(entry))}</div>
+                </div>`).join("") : '<div class="empty">No audit events yet.</div>'}
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title">
+              <h2>Quick Actions</h2>
+              <small>Jump into the live workflows</small>
+            </div>
+            <div class="stack">
+              <div class="feed-item">
+                <strong>Publish Schema</strong>
+                <div class="muted" style="margin:8px 0 12px;">Open the registry drawer and publish a provider contract directly into the standalone schema catalog.</div>
+                <a class="btn" href="#/registry">Publish Schema →</a>
+              </div>
+              <div class="feed-item">
+                <strong>Generate Code</strong>
+                <div class="muted" style="margin:8px 0 12px;">Pick a published service, tailor consumer context, and produce files without opening a live session.</div>
+                <a class="btn" href="#/generate">Generate Code →</a>
+              </div>
+            </div>
+          </section>
+        </div>`);
+    }
+
+    function openDrawer(content) {
+      state.drawerOpen = true;
+      document.getElementById("overlay").classList.add("show");
+      const drawer = document.getElementById("drawer");
+      drawer.innerHTML = content;
+      drawer.classList.add("open");
+      wireDrawer();
+    }
+
+    function closeDrawer() {
+      state.drawerOpen = false;
+      document.getElementById("overlay").classList.remove("show");
+      document.getElementById("drawer").classList.remove("open");
+    }
+
+    function registryDetails(serviceId) {
+      const history = state.registryHistory[serviceId] || [];
+      if (!history.length) return '<div class="empty">Select a service to load version history.</div>';
+      const latest = history[0];
+      return `
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="inline-actions" style="justify-content:space-between;">
+              <strong>${escapeHtml(latest.serviceName || latest.service_id || serviceId)}</strong>
+              <span class="badge success">${escapeHtml(latest.version)}</span>
+            </div>
+            <div class="muted" style="margin:8px 0 10px;">${escapeHtml(latest.schema.base_url)} · auth ${escapeHtml(latest.schema.auth.type)}</div>
+            <pre>${escapeHtml(JSON.stringify(latest.schema, null, 2))}</pre>
+          </div>
+          ${history.map((entry) => `
+            <div class="timeline-item">
+              <div class="inline-actions" style="justify-content:space-between;">
+                <span>${escapeHtml(entry.version)}</span>
+                <span class="meta">${new Date(entry.publishedAt || entry.published_at).toLocaleString()}</span>
+              </div>
+              <div class="inline-actions" style="margin-top:8px;">
+                <span class="badge ${entry.isLatest ? "success" : ""}">${entry.isLatest ? "LATEST" : "HISTORY"}</span>
+                <span class="badge">${(entry.schema.endpoints || []).length} endpoints</span>
+              </div>
+            </div>`).join("")}
+        </div>`;
+    }
+
+    function renderRegistry() {
+      const tags = Array.from(new Set(state.registry.flatMap((entry) => entry.tags || [])));
+      const filtered = state.registry.filter((entry) => {
+        const matchesTag = !state.registryTag || (entry.tags || []).includes(state.registryTag);
+        const q = state.registryQuery.toLowerCase();
+        const haystack = `${entry.serviceName || ""} ${entry.orgName || ""} ${entry.serviceId || ""} ${(entry.tags || []).join(" ")}`.toLowerCase();
+        return matchesTag && (!q || haystack.includes(q));
+      });
+
+      return renderPage("Schema Registry", "Search, inspect, and publish session-independent provider contracts.", `
+        <div class="panel">
+          <div class="filter-row">
+            <input id="registry-search" placeholder="Search services, orgs, tags…" value="${escapeHtml(state.registryQuery)}" />
+            <button class="btn" id="open-publish">Publish Schema</button>
+          </div>
+          <div class="chips" style="margin-top:12px;">
+            <button class="chip ${state.registryTag === "" ? "active" : ""}" data-tag="">All</button>
+            ${tags.map((tag) => `<button class="chip ${state.registryTag === tag ? "active" : ""}" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`).join("")}
+          </div>
+        </div>
+        <div class="two-col" style="margin-top:18px;">
+          <section class="panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Service</th><th>Org</th><th>Version</th><th>Endpoints</th><th>Updated</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  ${filtered.map((entry, index) => `
+                    <tr class="data-row" style="animation-delay:${index * 30}ms;">
+                      <td><strong>${escapeHtml(entry.serviceName || entry.service_name || entry.serviceId)}</strong><div class="muted">${escapeHtml(entry.serviceId || entry.service_id)}</div></td>
+                      <td>${escapeHtml(entry.orgName || entry.org_name || "unknown")}</td>
+                      <td>${escapeHtml(entry.version || entry.latest_version)}</td>
+                      <td>${(entry.schema?.endpoints || []).length || entry.endpoint_count || 0}</td>
+                      <td>${new Date(entry.publishedAt || entry.published_at).toLocaleString()}</td>
+                      <td><button class="ghost inspect-registry" data-service="${escapeHtml(entry.serviceId || entry.service_id)}">Inspect</button></td>
+                    </tr>`).join("") || '<tr><td colspan="6"><div class="empty">No published schemas yet.</div></td></tr>'}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title">
+              <h2>Detail Panel</h2>
+              <small>Version history and normalized schema</small>
+            </div>
+            ${state.selectedServiceId ? registryDetails(state.selectedServiceId) : '<div class="empty">Select a service row to inspect schema history.</div>'}
+          </section>
+        </div>`);
+    }
+
+    async function renderGeneratePage() {
+      const selected = state.registry.find((entry) => (entry.serviceId || entry.service_id) === state.selectedServiceId) || state.registry[0] || null;
+      if (!state.selectedServiceId && selected) {
+        state.selectedServiceId = selected.serviceId || selected.service_id;
+      }
+      if (state.selectedServiceId) {
+        await ensureRegistryHistory(state.selectedServiceId);
+      }
+      const history = state.registryHistory[state.selectedServiceId] || [];
+      const latest = history[0] || selected;
+      const endpoints = latest?.schema?.endpoints || [];
+      return renderPage("Generate Integration", "Generate, validate, inspect, copy, and ZIP-download integration output from published schemas.", `
+        <div class="two-col">
+          <section class="panel">
+            <div class="section-title"><h2>Configuration</h2><small>Standalone generate endpoint</small></div>
+            <div class="stack">
+              <label><span>Service</span>
+                <select id="generate-service">${state.registry.map((entry) => {
+                  const id = entry.serviceId || entry.service_id;
+                  return `<option value="${escapeHtml(id)}" ${id === state.selectedServiceId ? "selected" : ""}>${escapeHtml(entry.serviceName || entry.service_name || id)}</option>`;
+                }).join("")}</select>
+              </label>
+              <label><span>Version</span>
+                <select id="generate-version">
+                  <option value="latest" ${state.selectedVersion === "latest" ? "selected" : ""}>latest</option>
+                  ${history.map((entry) => `<option value="${escapeHtml(entry.version)}" ${state.selectedVersion === entry.version ? "selected" : ""}>${escapeHtml(entry.version)}</option>`).join("")}
+                </select>
+              </label>
+              <div class="three-col">
+                <label><span>Language</span><select id="generate-language"><option>typescript</option><option>python</option><option>go</option><option>javascript</option></select></label>
+                <label><span>Framework</span><input id="generate-framework" placeholder="nextjs" /></label>
+                <label><span>Model</span><input value="${escapeHtml(state.llm?.model || "unknown")}" readonly /></label>
+              </div>
+              <label><span>Use case</span><textarea id="generate-use-case" placeholder="Create a payment intent on checkout"></textarea></label>
+              <label><span>Existing patterns</span><textarea id="generate-patterns" placeholder="We use axios and dotenv"></textarea></label>
+              <div>
+                <div class="meta" style="margin-bottom:10px;">Endpoints</div>
+                <div class="chips">${endpoints.map((endpoint) => `
+                  <label class="chip" style="display:inline-flex; align-items:center; gap:8px;">
+                    <input type="checkbox" class="endpoint-check" value="${escapeHtml(endpoint.path)}" />
+                    <span>${escapeHtml(endpoint.method)} ${escapeHtml(endpoint.path)}</span>
+                  </label>`).join("") || '<div class="empty">Choose a service to load endpoint options.</div>'}</div>
+              </div>
+              <div class="inline-actions" style="justify-content:space-between;">
+                <span class="badge ${state.llm?.api_key_set ? "success" : "warning"}">${state.llm?.api_key_set ? "LLM READY" : "FALLBACK MODE"}</span>
+                <button class="btn" id="generate-submit">Generate</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title"><h2>Output</h2><small>${state.generated ? "Generated files and validation status" : "Waiting for generation"}</small></div>
+            ${state.generated ? renderGeneratedOutput() : '<div class="empty">Select a service and click Generate.</div>'}
+          </section>
+        </div>`);
+    }
+
+    function renderGeneratedOutput() {
+      const files = state.generated.files || [];
+      const selected = files[state.selectedGenerateFile] || files[0];
+      return `
+        ${state.validation ? `<div class="feed-item" style="margin-bottom:14px;">
+          <div class="inline-actions" style="justify-content:space-between;">
+            <strong>Validation ${state.validation.passed ? "Passed" : "Failed"}</strong>
+            <span class="badge ${state.validation.passed ? "success" : "danger"}">${state.validation.issue_count} issue(s)</span>
+          </div>
+        </div>` : ""}
+        <div class="tabs">
+          ${files.map((file, index) => `<button class="tab ${index === state.selectedGenerateFile ? "active" : ""}" data-file-index="${index}">${escapeHtml(file.filename)} ${badgeForSource(file.source)}</button>`).join("")}
+        </div>
+        ${selected ? `
+          <div class="inline-actions" style="justify-content:space-between; margin-bottom:10px;">
+            <div>${badgeForSource(selected.source)}</div>
+            <div class="inline-actions">
+              <button class="ghost" id="copy-file">Copy</button>
+              <button class="btn" id="download-zip">Download as ZIP</button>
+            </div>
+          </div>
+          <div class="code-shell">
+            <div class="muted" style="margin-bottom:10px;">${escapeHtml(selected.description || "")}</div>
+            <pre><code>${highlightCode(selected.content || "")}</code></pre>
+          </div>
+          <div class="feed-item" style="margin-top:14px;">
+            <strong>Summary</strong>
+            <div class="muted" style="margin-top:8px;">${escapeHtml(state.generated.summary || "")}</div>
+            <div class="stack" style="margin-top:10px;">
+              ${(state.generated.next_steps || []).map((step) => `<div>• ${escapeHtml(step)}</div>`).join("")}
+              ${(state.generated.warnings || []).map((warning) => `<div style="color:var(--warning);">• ${escapeHtml(warning)}</div>`).join("")}
+            </div>
+          </div>` : '<div class="empty">No files generated.</div>'}`;
+    }
+
+    function renderSessions() {
+      const rows = state.sessions.filter((entry) => entry.sessionId).slice(0, 50);
+      return renderPage("Session Monitor", "Recent session lifecycle events, plus a live session inspector if you have consumer or provider credentials configured.", `
+        <div class="panel">
+          <div class="section-title"><h2>Recent Sessions</h2><small>From audit category=session</small></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Session ID</th><th>Service</th><th>Status Event</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${rows.map((entry, index) => `
+                  <tr class="data-row" style="animation-delay:${index * 30}ms;">
+                    <td>${escapeHtml(entry.sessionId)}</td>
+                    <td>${escapeHtml(entry.serviceId || "unknown")}</td>
+                    <td>${escapeHtml(entry.event)}</td>
+                    <td>${new Date(entry.ts).toLocaleString()}</td>
+                    <td><button class="ghost inspect-session" data-session="${escapeHtml(entry.sessionId)}">Open</button></td>
+                  </tr>`).join("") || '<tr><td colspan="5"><div class="empty">No sessions yet.</div></td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="session-grid" style="margin-top:18px;">
+          <section class="session-shell">
+            <h4>Provider Panel</h4>
+            ${state.sessionStatus?.participants?.provider ? `<pre>${escapeHtml(JSON.stringify(state.sessionStatus.participants.provider, null, 2))}</pre>` : '<div class="empty">No provider participant loaded.</div>'}
+          </section>
+          <section class="session-shell">
+            <h4>Center Feed</h4>
+            ${state.sessionStatus ? `<div class="stack">
+              <div class="badge ${state.sessionStatus.status === "active" ? "success" : ""}">${escapeHtml(state.sessionStatus.status)}</div>
+              <pre>${escapeHtml(JSON.stringify({ service_id: state.sessionStatus.service_id, schema: state.sessionStatus.schema, messages: state.sessionStatus.messages }, null, 2))}</pre>
+            </div>` : '<div class="empty">Click a session to inspect live state.</div>'}
+          </section>
+          <section class="session-shell">
+            <h4>Consumer Panel</h4>
+            ${state.sessionStatus?.participants?.consumer ? `<pre>${escapeHtml(JSON.stringify(state.sessionStatus.participants.consumer, null, 2))}</pre>` : '<div class="empty">No consumer participant loaded.</div>'}
+          </section>
+        </div>`);
+    }
+
+    function renderAudit() {
+      const category = document.getElementById("audit-category")?.value || "";
+      const org = document.getElementById("audit-org")?.value || "";
+      const search = document.getElementById("audit-search")?.value?.toLowerCase() || "";
+      const from = document.getElementById("audit-from")?.value || "";
+      const to = document.getElementById("audit-to")?.value || "";
+
+      const filtered = state.audit.filter((entry) => {
+        if (category && entry.category !== category) return false;
+        if (org && !JSON.stringify(entry).includes(org)) return false;
+        if (search && !JSON.stringify(entry).toLowerCase().includes(search)) return false;
+        if (from && new Date(entry.ts) < new Date(from)) return false;
+        if (to && new Date(entry.ts) > new Date(to + "T23:59:59")) return false;
+        return true;
+      });
+      const rows = filtered.slice(0, state.auditVisibleCount);
+      return renderPage("Audit Log", "Filterable activity across auth, sessions, schema, and code generation.", `
+        <div class="panel">
+          <div class="filter-row">
+            <select id="audit-category">
+              <option value="">All categories</option>
+              <option value="auth">auth</option>
+              <option value="session">session</option>
+              <option value="schema">schema</option>
+              <option value="tool">tool</option>
+              <option value="codegen">codegen</option>
+            </select>
+            <input id="audit-org" placeholder="Org filter" />
+            <input id="audit-from" type="date" />
+            <input id="audit-to" type="date" />
+            <input id="audit-search" placeholder="Search details…" />
+            <label class="toggle"><input id="audit-auto" type="checkbox" ${state.autoRefreshAudit ? "checked" : ""} /> Auto-refresh</label>
+            <button class="ghost" id="audit-export">Export CSV</button>
+          </div>
+        </div>
+        <div class="panel scroll-area" style="margin-top:18px;" id="audit-scroll">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Category</th><th>Event</th><th>Org</th><th>Session</th><th>Details</th></tr></thead>
+              <tbody>
+                ${rows.map((entry, index) => `
+                  <tr class="data-row" style="animation-delay:${index * 30}ms;">
+                    <td>${new Date(entry.ts).toLocaleString()}</td>
+                    <td>${escapeHtml(entry.category)}</td>
+                    <td>${escapeHtml(entry.event)}</td>
+                    <td>${escapeHtml(entry.orgId || entry.initiatorOrgId || "-")}</td>
+                    <td>${escapeHtml(entry.sessionId || "-")}</td>
+                    <td><pre>${escapeHtml(JSON.stringify(entry, null, 2))}</pre></td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${rows.length < filtered.length ? '<div class="empty" style="margin-top:14px;">Scroll or click refresh to load more rows.</div>' : ''}
+        </div>`);
+    }
+
+    function renderSettings() {
+      return renderPage("Settings", "Manage auth helpers, API keys, LLM checks, and org metadata for the dashboard workflows.", `
+        <div class="two-col">
+          <section class="panel">
+            <div class="section-title"><h2>LLM Configuration</h2><small>Live config from /llm/status</small></div>
+            <div class="stack">
+              <div class="feed-item"><pre>${escapeHtml(JSON.stringify(state.llm, null, 2))}</pre></div>
+              <button class="btn" id="test-llm">Test Connection</button>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title"><h2>Dashboard Auth</h2><small>Stored in local browser storage</small></div>
+            <div class="settings-form stack">
+              <label><span>org_id</span><input id="auth-org-id" value="${escapeHtml(state.auth.org_id || "")}" placeholder="org_demo_provider" /></label>
+              <label><span>api_key</span><input id="auth-api-key" value="${escapeHtml(state.auth.api_key || "")}" placeholder="bf_... or dev-provider-secret" /></label>
+              <div class="inline-actions">
+                <button class="btn" id="save-auth">Save</button>
+                <button class="ghost" id="load-provider-token">Mint Provider Token</button>
+                <button class="ghost" id="load-consumer-token">Mint Consumer Token</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="two-col" style="margin-top:18px;">
+          <section class="panel">
+            <div class="section-title"><h2>API Keys</h2><small>Create, rotate, revoke</small></div>
+            <div class="stack">
+              <div class="three-col">
+                <label><span>Org ID</span><input id="keys-org-id" value="${escapeHtml(state.auth.org_id || "")}" placeholder="org_demo_provider" /></label>
+                <label><span>Label</span><input id="keys-label" placeholder="dashboard key" /></label>
+                <label><span>TTL days</span><input id="keys-ttl" type="number" placeholder="30" /></label>
+              </div>
+              <div class="inline-actions">
+                <button class="btn" id="create-key">Create Key</button>
+                <button class="ghost" id="refresh-keys">Refresh Keys</button>
+              </div>
+              <div id="keys-list" class="stack"><div class="empty">Enter an org_id and refresh keys.</div></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="section-title"><h2>Organizations</h2><small>Read-only config list</small></div>
+            <div class="stack">
+              ${state.orgs.map((org) => `<div class="feed-item">
+                <strong>${escapeHtml(org.name)}</strong>
+                <div class="muted" style="margin-top:8px;">${escapeHtml(org.org_id)} · roles ${escapeHtml((org.allowed_roles || []).join(", "))}</div>
+              </div>`).join("")}
+            </div>
+          </section>
+        </div>`);
+    }
+
+    async function render() {
+      document.getElementById("nav").innerHTML = navMarkup();
+      const app = document.getElementById("app");
+      const hash = currentHash();
+      if (hash === "#/generate") {
+        app.innerHTML = await renderGeneratePage();
+      } else if (hash === "#/registry") {
+        app.innerHTML = renderRegistry();
+      } else if (hash === "#/sessions") {
+        app.innerHTML = renderSessions();
+      } else if (hash === "#/audit") {
+        app.innerHTML = renderAudit();
+      } else if (hash === "#/settings") {
+        app.innerHTML = renderSettings();
+      } else {
+        app.innerHTML = renderDashboard();
+      }
+      wirePage();
+    }
+
+    async function publishSchemaFromDrawer() {
+      try {
+        const serviceName = document.getElementById("publish-service-name").value.trim();
+        const serviceDescription = document.getElementById("publish-service-description").value.trim();
+        const schemaRaw = document.getElementById("publish-schema-json").value;
+        const tags = document.getElementById("publish-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+        const changelog = document.getElementById("publish-changelog").value.trim();
+        const sampleLanguage = document.getElementById("publish-sample-language").value.trim();
+        const sampleContent = document.getElementById("publish-sample-content").value.trim();
+        let serviceId = document.getElementById("publish-existing-service").value;
+        const schema = JSON.parse(schemaRaw);
+        const token = await getToken("provider");
+
+        if (!serviceId) {
+          const register = await fetchJson("/mcp", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: Date.now(),
+              method: "tools/call",
+              params: {
+                name: "register_service",
+                arguments: {
+                  org_token: token,
+                  service_name: serviceName,
+                  service_description: serviceDescription || "Published from dashboard",
+                  tags
+                }
+              }
+            })
+          });
+          serviceId = JSON.parse(register.result.content[0].text).service_id;
+        }
+
+        await fetchJson("/registry/schemas", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            service_id: serviceId,
+            service_name: serviceName || undefined,
+            schema,
+            changelog,
+            tags,
+            code_samples: sampleContent ? [{ language: sampleLanguage, content: sampleContent, description: "Dashboard sample" }] : []
+          })
+        });
+
+        closeDrawer();
+        await refreshBootData();
+        await refreshAudit();
+        showToast("success", "Schema published", "The registry has been updated.");
+        render();
+      } catch (error) {
+        showToast("error", "Publish failed", error.message);
+      }
+    }
+
+    async function generateFiles() {
+      try {
+        if (!state.auth.api_key) throw new Error("Set an API key in Settings first.");
+        const checked = Array.from(document.querySelectorAll(".endpoint-check:checked")).map((input) => input.value);
+        const response = await fetchJson(`/generate?api_key=${encodeURIComponent(state.auth.api_key)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            service_id: document.getElementById("generate-service").value,
+            version: document.getElementById("generate-version").value,
+            consumer_context: {
+              language: document.getElementById("generate-language").value,
+              framework: document.getElementById("generate-framework").value,
+              use_case: document.getElementById("generate-use-case").value,
+              existing_patterns: document.getElementById("generate-patterns").value
+            },
+            options: {
+              include_tests: true,
+              endpoints: checked
+            }
+          })
+        });
+
+        let result = response;
+        if (response.job_id) {
+          showToast("warning", "Async generation started", "Polling until the job completes.");
+          while (true) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            const status = await fetchJson(`/generate/status/${response.job_id}?api_key=${encodeURIComponent(state.auth.api_key)}`);
+            if (status.status === "complete") {
+              result = status.result;
+              break;
+            }
+            if (status.status === "failed") throw new Error(status.error || "Generate job failed");
+          }
+        }
+
+        state.generated = result;
+        state.selectedGenerateFile = 0;
+        state.validation = await fetchJson(`/validate?api_key=${encodeURIComponent(state.auth.api_key)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            service_id: result.service_id,
+            version: result.schema_version,
+            code: result.files.map((file) => file.content).join("\n"),
+            language: document.getElementById("generate-language").value
+          })
+        });
+        showToast("success", "Generation complete", `Generated ${result.files.length} file(s).`);
+        render();
+      } catch (error) {
+        showToast("error", "Generate failed", error.message);
+      }
+    }
+
+    async function inspectSession(sessionId) {
+      try {
+        const token = await getToken("consumer");
+        const response = await fetchJson("/mcp", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: Date.now(),
+            method: "tools/call",
+            params: {
+              name: "get_session_status",
+              arguments: {
+                org_token: token,
+                session_id: sessionId
+              }
+            }
+          })
+        });
+        state.selectedSessionId = sessionId;
+        state.sessionStatus = JSON.parse(response.result.content[0].text);
+        render();
+      } catch (error) {
+        showToast("error", "Session load failed", error.message);
+      }
+    }
+
+    async function refreshKeysList() {
+      try {
+        const orgId = document.getElementById("keys-org-id").value.trim();
+        if (!orgId) throw new Error("Enter an org_id first.");
+        const payload = await fetchJson(`/auth/keys/${encodeURIComponent(orgId)}`);
+        const host = document.getElementById("keys-list");
+        host.innerHTML = payload.keys.length ? payload.keys.map((key) => `
+          <div class="feed-item">
+            <div class="inline-actions" style="justify-content:space-between;">
+              <div>
+                <strong>${escapeHtml(key.keyId)}</strong>
+                <div class="muted" style="margin-top:8px;">${escapeHtml(key.label || "no label")} · ${escapeHtml(key.status)}</div>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost rotate-key" data-key="${escapeHtml(key.keyId)}">Rotate</button>
+                <button class="danger revoke-key" data-key="${escapeHtml(key.keyId)}">Revoke</button>
+              </div>
+            </div>
+          </div>`).join("") : '<div class="empty">No keys found for that org.</div>';
+        wirePage();
+      } catch (error) {
+        showToast("error", "Key fetch failed", error.message);
+      }
+    }
+
+    async function testLlmConnection() {
+      try {
+        if (!state.registry.length) throw new Error("Publish or load a schema first.");
+        if (!state.auth.api_key) throw new Error("Save an API key in Settings first.");
+        const sample = state.registry[0];
+        await fetchJson(`/generate?api_key=${encodeURIComponent(state.auth.api_key)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            service_id: sample.serviceId || sample.service_id,
+            version: "latest",
+            consumer_context: {
+              language: "typescript",
+              framework: "node",
+              use_case: "Minimal LLM connectivity check"
+            },
+            options: {
+              include_tests: false,
+              endpoints: []
+            }
+          })
+        });
+        showToast("success", "LLM test succeeded", "The generate endpoint responded successfully.");
+      } catch (error) {
+        showToast("error", "LLM test failed", error.message);
+      }
+    }
+
+    async function downloadZip() {
+      if (!state.generated?.files?.length) return;
+      const zip = new JSZip();
+      for (const file of state.generated.files) {
+        zip.file(file.filename, file.content);
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "bridgefill-generated.zip";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function drawerMarkup() {
+      return `
+        <div class="drawer-header">
+          <div>
+            <strong style="font-family:'IBM Plex Sans Condensed', sans-serif; font-size:1.3rem;">Publish Schema</strong>
+            <div class="muted" style="margin-top:6px;">Create a service first or attach a new schema version to an existing one.</div>
+          </div>
+          <button class="ghost" id="close-drawer">Close</button>
+        </div>
+        <div class="stack">
+          <label><span>Existing Service</span>
+            <select id="publish-existing-service">
+              <option value="">Create a new service</option>
+              ${state.registry.map((entry) => {
+                const id = entry.serviceId || entry.service_id;
+                return `<option value="${escapeHtml(id)}">${escapeHtml(entry.serviceName || entry.service_name || id)}</option>`;
+              }).join("")}
+            </select>
+          </label>
+          <div class="two-col" style="grid-template-columns:1fr 1fr;">
+            <label><span>Service Name</span><input id="publish-service-name" placeholder="Maps API" /></label>
+            <label><span>Description</span><input id="publish-service-description" placeholder="Provider-facing description" /></label>
+          </div>
+          <div class="two-col" style="grid-template-columns:1fr 1fr;">
+            <label><span>Tags</span><input id="publish-tags" placeholder="maps, places" /></label>
+            <label><span>Changelog</span><input id="publish-changelog" placeholder="Initial release" /></label>
+          </div>
+          <label><span>Schema JSON</span><textarea id="publish-schema-json" placeholder='{"base_url":"https://api.example.com","auth":{"type":"api_key"},"endpoints":[]}'></textarea></label>
+          <div class="two-col" style="grid-template-columns:220px 1fr;">
+            <label><span>Code Sample Language</span><select id="publish-sample-language"><option>typescript</option><option>python</option><option>go</option><option>javascript</option></select></label>
+            <label><span>Code Sample</span><textarea id="publish-sample-content" placeholder="Optional authoritative provider sample"></textarea></label>
+          </div>
+          <button class="btn" id="submit-publish">Submit</button>
+        </div>`;
+    }
+
+    function exportAuditCsv() {
+      const rows = state.audit.map((entry) => [
+        entry.ts,
+        entry.category,
+        entry.event,
+        entry.orgId || entry.initiatorOrgId || "",
+        entry.sessionId || "",
+        JSON.stringify(entry)
+      ]);
+      const csv = [["time", "category", "event", "org", "session", "details"], ...rows]
+        .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+        .join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "bridgefill-audit.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function wireDrawer() {
+      document.getElementById("close-drawer")?.addEventListener("click", closeDrawer);
+      document.getElementById("submit-publish")?.addEventListener("click", publishSchemaFromDrawer);
+      const schema = document.getElementById("publish-schema-json");
+      schema?.addEventListener("input", () => {
+        try {
+          JSON.parse(schema.value);
+          schema.style.borderColor = "rgba(116, 240, 195, 0.35)";
+        } catch {
+          schema.style.borderColor = "rgba(255, 115, 115, 0.75)";
+        }
+      });
+    }
+
+    function wirePage() {
+      document.getElementById("overlay").onclick = closeDrawer;
+      document.getElementById("registry-search")?.addEventListener("input", (event) => {
+        state.registryQuery = event.target.value;
+        render();
+      });
+      document.querySelectorAll("[data-tag]").forEach((button) => button.addEventListener("click", (event) => {
+        state.registryTag = event.currentTarget.dataset.tag || "";
+        render();
+      }));
+      document.getElementById("open-publish")?.addEventListener("click", () => openDrawer(drawerMarkup()));
+      document.querySelectorAll(".inspect-registry").forEach((button) => button.addEventListener("click", async (event) => {
+        state.selectedServiceId = event.currentTarget.dataset.service;
+        await ensureRegistryHistory(state.selectedServiceId);
+        render();
+      }));
+
+      document.getElementById("generate-service")?.addEventListener("change", async (event) => {
+        state.selectedServiceId = event.target.value;
+        state.selectedVersion = "latest";
+        await ensureRegistryHistory(state.selectedServiceId);
+        render();
+      });
+      document.getElementById("generate-version")?.addEventListener("change", (event) => {
+        state.selectedVersion = event.target.value;
+      });
+      document.getElementById("generate-submit")?.addEventListener("click", generateFiles);
+      document.querySelectorAll("[data-file-index]").forEach((button) => button.addEventListener("click", (event) => {
+        state.selectedGenerateFile = Number(event.currentTarget.dataset.fileIndex);
+        render();
+      }));
+      document.getElementById("copy-file")?.addEventListener("click", async () => {
+        const file = state.generated.files[state.selectedGenerateFile];
+        await navigator.clipboard.writeText(file.content);
+        showToast("success", "Copied", `${file.filename} copied to clipboard.`);
+      });
+      document.getElementById("download-zip")?.addEventListener("click", downloadZip);
+
+      document.querySelectorAll(".inspect-session").forEach((button) => button.addEventListener("click", (event) => inspectSession(event.currentTarget.dataset.session)));
+      document.getElementById("audit-auto")?.addEventListener("change", (event) => {
+        state.autoRefreshAudit = event.target.checked;
+        setupAuditRefresh();
+      });
+      document.getElementById("audit-export")?.addEventListener("click", exportAuditCsv);
+      document.getElementById("audit-scroll")?.addEventListener("scroll", (event) => {
+        const el = event.currentTarget;
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 50) {
+          state.auditVisibleCount += 50;
+          render();
+        }
+      });
+
+      document.getElementById("save-auth")?.addEventListener("click", () => {
+        saveAuth({
+          org_id: document.getElementById("auth-org-id").value.trim(),
+          api_key: document.getElementById("auth-api-key").value.trim()
+        });
+        document.getElementById("keys-org-id").value = state.auth.org_id || "";
+        showToast("success", "Saved", "Dashboard auth settings stored locally.");
+      });
+      document.getElementById("load-provider-token")?.addEventListener("click", async () => {
+        try {
+          const token = await getToken("provider");
+          showToast("success", "Provider token ready", `${token.slice(0, 16)}…`);
+        } catch (error) {
+          showToast("error", "Token mint failed", error.message);
+        }
+      });
+      document.getElementById("load-consumer-token")?.addEventListener("click", async () => {
+        try {
+          const token = await getToken("consumer");
+          showToast("success", "Consumer token ready", `${token.slice(0, 16)}…`);
+        } catch (error) {
+          showToast("error", "Token mint failed", error.message);
+        }
+      });
+      document.getElementById("test-llm")?.addEventListener("click", testLlmConnection);
+      document.getElementById("create-key")?.addEventListener("click", async () => {
+        try {
+          const payload = await fetchJson("/auth/keys", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              org_id: document.getElementById("keys-org-id").value.trim(),
+              label: document.getElementById("keys-label").value.trim() || null,
+              ttl_days: document.getElementById("keys-ttl").value ? Number(document.getElementById("keys-ttl").value) : null
+            })
+          });
+          showToast("success", "Key created", `Raw key: ${payload.raw_key}`);
+          refreshKeysList();
+        } catch (error) {
+          showToast("error", "Create key failed", error.message);
+        }
+      });
+      document.getElementById("refresh-keys")?.addEventListener("click", refreshKeysList);
+      document.querySelectorAll(".rotate-key").forEach((button) => button.addEventListener("click", async (event) => {
+        try {
+          const payload = await fetchJson(`/auth/keys/${event.currentTarget.dataset.key}/rotate`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ grace_period_ms: 1000 })
+          });
+          showToast("success", "Key rotated", `New raw key: ${payload.raw_key}`);
+          refreshKeysList();
+        } catch (error) {
+          showToast("error", "Rotate failed", error.message);
+        }
+      }));
+      document.querySelectorAll(".revoke-key").forEach((button) => button.addEventListener("click", async (event) => {
+        try {
+          await fetchJson(`/auth/keys/${event.currentTarget.dataset.key}`, { method: "DELETE" });
+          showToast("success", "Key revoked", "The API key was revoked.");
+          refreshKeysList();
+        } catch (error) {
+          showToast("error", "Revoke failed", error.message);
+        }
+      }));
+    }
+
+    function setupAuditRefresh() {
+      if (auditRefreshTimer) clearInterval(auditRefreshTimer);
+      if (state.autoRefreshAudit) {
+        auditRefreshTimer = setInterval(async () => {
+          await refreshAudit();
+          if (currentHash() === "#/audit" || currentHash() === "#/sessions" || currentHash() === "#/") {
+            render();
+          }
+        }, 5000);
+      }
+    }
+
+    window.addEventListener("hashchange", render);
+
+    (async function boot() {
+      try {
+        await refreshBootData();
+        await refreshAudit();
+        render();
+      } catch (error) {
+        document.getElementById("app").innerHTML = `<div class="page"><div class="empty">Dashboard boot failed: ${escapeHtml(error.message)}</div></div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

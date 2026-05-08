@@ -94,6 +94,27 @@ async function main(): Promise<void> {
     }
   });
 
+  passed += await runCheck("GET / serves the dashboard HTML shell", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/",
+    });
+    assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+    assert(response.headers["content-type"]?.includes("text/html"), `Expected html content-type, received ${response.headers["content-type"]}`);
+    assert(response.body.includes("BridgeFill Dashboard"), "Expected dashboard title in HTML");
+  });
+
+  passed += await runCheck("GET /orgs returns configured organizations", async () => {
+    const response = await server.inject({
+      method: "GET",
+      url: "/orgs",
+    });
+    const body = response.json() as { orgs: Array<{ org_id: string }> };
+    assert(response.statusCode === 200, `Expected 200, received ${response.statusCode}`);
+    assert(Array.isArray(body.orgs) && body.orgs.length > 0, "Expected org list");
+    assert(body.orgs.some((org) => org.org_id === "org_demo_provider"), "Expected org_demo_provider in org list");
+  });
+
   passed += await runCheck("GET /llm/status returns current LLM config", async () => {
     const response = await server.inject({
       method: "GET",
@@ -1159,7 +1180,7 @@ async function main(): Promise<void> {
 
   await server.close();
 
-  if (passed !== 43) {
+  if (passed !== 45) {
     process.exit(1);
   }
 }

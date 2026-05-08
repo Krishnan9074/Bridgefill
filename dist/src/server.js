@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -78,6 +80,9 @@ function buildMeta() {
         serverVersion: config.mcp.serverVersion,
     };
 }
+async function readDashboardHtml() {
+    return readFile(join(process.cwd(), "src", "public", "index.html"), "utf8");
+}
 async function handleSingleOrBatch(body) {
     const meta = buildMeta();
     if (Array.isArray(body)) {
@@ -123,6 +128,17 @@ export async function buildServer() {
             time: new Date().toISOString(),
         };
     });
+    fastify.get("/", async (_request, reply) => {
+        reply.type("text/html; charset=utf-8");
+        return readDashboardHtml();
+    });
+    fastify.get("/orgs", async () => ({
+        orgs: Object.entries(config.orgs).map(([orgId, org]) => ({
+            org_id: orgId,
+            name: org.name,
+            allowed_roles: org.allowedRoles,
+        })),
+    }));
     fastify.get("/llm/status", async () => ({
         provider: config.llm.provider,
         model: config.llm.model,
